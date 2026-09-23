@@ -17,12 +17,18 @@ Task assignment and tracking app for all branches: **Raipur, Durg, Jagdalpur, Ra
 
 All of these rules are checked on the server (`backend/Code.gs`), not just hidden in the UI.
 
-## Screens
-- **Branch Dashboard**: branch tabs, per-employee counts (Pending / In Progress / Overdue / Done); click an employee to see their tasks
-- **Assign Task**: branch → person → task, priority, due date
-- **My Tasks**: your own tasks, with filters and search
-- **Users**: add users, change role/branch, disable, reset password, add branches
-- **Account**: change your password
+## Screens (mobile-first)
+Apple-style design with a Liquid Glass look (a CSS approximation, since Apple's real material exists only on Apple devices).
+Light / Dark / Auto theme under **Profile → Appearance**.
+
+- **Home**: greeting, branch chips, Pending / In Progress / Overdue / Done tiles, and the team list with completion rings. Tap a person to see their tasks.
+- **Tasks**: Reminders-style list grouped into Overdue / Today / Upcoming. Tap the circle to mark a task done; tap the task for details, status, remarks, edit and delete.
+- **(+) New Task**: bottom sheet. Pick a branch, pick a person, add the task, priority and due date (Today / Tomorrow / Next Week / Pick Date).
+- **Team** (Admin/Partner): people grouped by branch; tap to change role or branch, reset the password, or disable. Add people and branches.
+- **Profile**: appearance, change password, sign out.
+
+On phones, the navigation is a floating tab bar at the bottom. On desktop it becomes a sidebar.
+Staff can use **Add to Home Screen** so it opens like an app.
 
 ## Going live
 1. Set up the Google Sheet backend: Steps 1–4 of [`backend/README.md`](backend/README.md).
