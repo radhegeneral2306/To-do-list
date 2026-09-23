@@ -25,6 +25,43 @@ var HEADERS = {
 };
 
 // ---------------------------------------------------------------------------
+// One-time setup. Easiest: reload the Sheet and use the menu  Task App → Run setup.
+// (Kept at the top so "setup" is also the default in the editor's Run dropdown.)
+// ---------------------------------------------------------------------------
+
+function setup() {
+  var ss = ss_();
+  Object.keys(HEADERS).forEach(function (name) {
+    var sheet = ss.getSheetByName(name) || ss.insertSheet(name);
+    var cols = HEADERS[name].length;
+    sheet.getRange(1, 1, 1, cols).setValues([HEADERS[name]]).setFontWeight('bold');
+    sheet.setFrozenRows(1);
+    // Plain text everywhere, so Sheets doesn't turn dates/numbers into something else.
+    sheet.getRange(1, 1, sheet.getMaxRows(), cols).setNumberFormat('@');
+  });
+
+  if (readAll_('Branches').length === 0) {
+    DEFAULT_BRANCHES.forEach(function (b) { append_('Branches', { name: b }); });
+  }
+
+  var msg;
+  if (readAll_('Users').length === 0) {
+    insertUser_({ username: 'admin', password: 'admin123', name: 'Admin', role: 'admin', branch: ALL_BRANCHES });
+    msg = 'Setup done ✅  Login with  admin / admin123  and CHANGE THE PASSWORD immediately.';
+  } else {
+    msg = 'Setup done ✅  Existing users kept.';
+  }
+  Logger.log(msg);
+  // Popup in the Sheet. getUi() fails when run from the script editor, which is fine.
+  try { SpreadsheetApp.getUi().alert(msg); } catch (e) {}
+}
+
+/** Adds a "Task App" menu to the Sheet every time it is opened. */
+function onOpen() {
+  SpreadsheetApp.getUi().createMenu('Task App').addItem('Run setup', 'setup').addToUi();
+}
+
+// ---------------------------------------------------------------------------
 // Web App entry points
 // ---------------------------------------------------------------------------
 
@@ -83,33 +120,6 @@ function handle_(action, payload, token) {
     return fn(payload, session.user, session.token);
   } finally {
     if (lock) lock.releaseLock();
-  }
-}
-
-// ---------------------------------------------------------------------------
-// One-time setup (run manually from the Apps Script editor)
-// ---------------------------------------------------------------------------
-
-function setup() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  Object.keys(HEADERS).forEach(function (name) {
-    var sheet = ss.getSheetByName(name) || ss.insertSheet(name);
-    var cols = HEADERS[name].length;
-    sheet.getRange(1, 1, 1, cols).setValues([HEADERS[name]]).setFontWeight('bold');
-    sheet.setFrozenRows(1);
-    // Plain text everywhere, so Sheets doesn't turn dates/numbers into something else.
-    sheet.getRange(1, 1, sheet.getMaxRows(), cols).setNumberFormat('@');
-  });
-
-  if (readAll_('Branches').length === 0) {
-    DEFAULT_BRANCHES.forEach(function (b) { append_('Branches', { name: b }); });
-  }
-
-  if (readAll_('Users').length === 0) {
-    insertUser_({ username: 'admin', password: 'admin123', name: 'Admin', role: 'admin', branch: ALL_BRANCHES });
-    Logger.log('Setup done. Login with  admin / admin123  and CHANGE THE PASSWORD immediately.');
-  } else {
-    Logger.log('Setup done. Existing users kept.');
   }
 }
 
@@ -416,8 +426,16 @@ function checkPassword_(pw) {
 // Sheet helpers
 // ---------------------------------------------------------------------------
 
+function ss_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) {
+    throw new Error('This script is not linked to a Google Sheet. Open your Sheet → Extensions → Apps Script and paste the code there.');
+  }
+  return ss;
+}
+
 function getSheet_(name) {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+  var sheet = ss_().getSheetByName(name);
   if (!sheet) throw new Error('Sheet "' + name + '" missing. Run setup() first.');
   return sheet;
 }

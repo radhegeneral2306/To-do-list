@@ -14,13 +14,27 @@ Google account that should **own** the data (ideally a company Gmail, not a pers
 4. Click the 💾 **Save** icon.
 
 ## Step 3: Run setup (creates the tabs + first admin)
-1. At the top, pick the function **`setup`** in the dropdown and click **▶ Run**.
-2. Google will ask for permission → **Review permissions** → pick your account →
+1. Go back to the **Google Sheet tab** in your browser and **reload the page** (F5).
+2. Wait 5–10 seconds. A new menu **Task App** appears at the top, next to *Help*.
+3. Click **Task App → Run setup**.
+4. Google will ask for permission → **Continue** → pick your account →
    "Google hasn't verified this app" → **Advanced** → **Go to … (unsafe)** → **Allow**.
    (This is normal. It is your own script asking to edit your own sheet.)
-3. Go back to the sheet. You should now see 4 tabs: `Users`, `Tasks`, `Sessions`, `Branches`.
+5. If nothing happens after allowing, click **Task App → Run setup** once more.
+6. A popup says **"Setup done ✅"**, and you see 4 new tabs at the bottom: `Users`, `Tasks`, `Sessions`, `Branches`.
 
 First login: **username `admin`, password `admin123`**. Change it right away in the app (Account tab).
+
+> **Other way (from the script editor):** in the dropdown next to ▶ Run, make sure it says **`setup`**
+> (not `doGet` or `myFunction`), then click ▶ Run.
+
+### Tabs didn't appear?
+Open Apps Script → **Executions** (left sidebar, ☰ list icon) and look at the last run:
+- **Function name is `doGet` / `myFunction`:** the wrong function ran. Use **Task App → Run setup**.
+- **Error "not linked to a Google Sheet":** you made the script from script.google.com. Delete it, open
+  **your Sheet → Extensions → Apps Script**, and paste the code there.
+- **Error about authorization/permission:** run it again and finish the Allow steps in Step 3.
+- **No "Task App" menu:** you pasted old code, or didn't save. Paste the latest `Code.gs`, click 💾, reload the Sheet.
 
 ## Step 4: Deploy as a Web App
 1. In Apps Script, click **Deploy → New deployment**.

@@ -81,7 +81,10 @@ export function createFakeGoogle(data = {}, onChange = () => {}) {
     })
 
   return {
-    SpreadsheetApp: { getActiveSpreadsheet: () => spreadsheet },
+    SpreadsheetApp: {
+      getActiveSpreadsheet: () => spreadsheet,
+      getUi: () => ({ alert: () => {} }),
+    },
     Utilities: {
       DigestAlgorithm: { SHA_256: 'SHA_256' },
       Charset: { UTF_8: 'UTF_8' },

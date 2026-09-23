@@ -52,6 +52,22 @@ test('setup creates sheets, branches and admin', () => {
   assert.ok(!JSON.stringify(data.Users).includes('admin123'))
 })
 
+test('setup can be run again safely and shows a popup', () => {
+  let alerted = ''
+  const g = createFakeGoogle(data)
+  g.SpreadsheetApp.getUi = () => ({ alert: (m) => { alerted = m } })
+  loadBackend(source, g).setup()
+  assert.match(alerted, /Setup done/)
+  assert.equal(data.Branches.length, 7) // header + 6, not duplicated
+  assert.equal(call('listUsers', {}, admin).length, 5)
+})
+
+test('clear error when script is not linked to a Sheet', () => {
+  const g = createFakeGoogle({})
+  g.SpreadsheetApp.getActiveSpreadsheet = () => null
+  assert.throws(() => loadBackend(source, g).setup(), /not linked to a Google Sheet/)
+})
+
 test('wrong password and missing token are rejected', () => {
   assert.throws(() => login('admin', 'nope'), /Wrong username or password/)
   assert.throws(() => call('listTasks', {}), /Please login/)
