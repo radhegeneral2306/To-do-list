@@ -25,10 +25,11 @@ All of these rules are checked on the server (`backend/Code.gs`), not just hidde
 - **Account**: change your password
 
 ## Going live
-1. Set up the Google Sheet backend: follow [`backend/README.md`](backend/README.md).
+1. Set up the Google Sheet backend: Steps 1–4 of [`backend/README.md`](backend/README.md).
 2. GitHub repo **Settings → Pages → Source: GitHub Actions**.
 3. Add the repo variable `VITE_API_URL` (Step 5 of the backend guide).
 4. Merge to `main`. The workflow builds and publishes to `https://<username>.github.io/To-do-list/`.
+   Did you add the variable after merging? Then use **Actions → Deploy to GitHub Pages → Run workflow**.
 
 Without `VITE_API_URL` the app runs in **demo mode**. It uses the same backend code, but the data
 is saved only in that browser. Demo logins use password `demo123` (e.g. `partner`, `raipur.manager`, `raipur.staff1`);

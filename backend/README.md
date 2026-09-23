@@ -46,12 +46,20 @@ Open Apps Script → **Executions** (left sidebar, ☰ list icon) and look at th
 
 "Anyone" here only means anyone can *reach* the URL. Without a valid login, the script refuses every request.
 
-## Step 5: Connect the React app
-In GitHub: repo **Settings → Secrets and variables → Actions → Variables tab → New repository variable**
-- Name: `VITE_API_URL`
-- Value: the `/exec` URL from Step 4
+## Step 5: Connect the React app and publish the website
+Do these in the GitHub website, in this order:
 
-Then re-run the deploy (Actions tab → "Deploy to GitHub Pages" → Run workflow).
+1. **Turn on Pages:** repo **Settings → Pages** → under "Build and deployment", set **Source: GitHub Actions**.
+2. **Add the Sheet URL:** **Settings → Secrets and variables → Actions → Variables** tab → **New repository variable**
+   - Name: `VITE_API_URL`
+   - Value: the `/exec` URL from Step 4
+3. **Put the code on `main`:** open the Pull Request for this app → **Merge pull request → Confirm merge**.
+   Merging to `main` starts the deploy automatically. Check the **Actions** tab for a green ✓ (2–3 minutes).
+4. Open `https://<your-username>.github.io/To-do-list/`.
+
+**Yellow "DEMO MODE" banner still showing?** The site was built before the variable was added. Go to
+**Actions → "Deploy to GitHub Pages" → Run workflow → branch `main` → Run workflow**.
+(This "Run workflow" button only appears once the code is on `main`.)
 
 ## When you change Code.gs later
 Paste the new code, then **Deploy → Manage deployments → ✏️ Edit → Version: New version → Deploy**.
