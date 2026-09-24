@@ -4,7 +4,10 @@ import { call } from '../api.js'
 import { useAuth } from '../auth/AuthContext.jsx'
 import LargeTitle from '../components/LargeTitle.jsx'
 import { Avatar, ErrorText, Segmented, Sheet, SkeletonRows, useToast } from '../components/ui.jsx'
-import { ROLE_LABELS, emitRefresh, useApi } from '../utils.js'
+import { ROLE_LABELS } from '../utils.js'
+import { update, useQuery } from '../data.js'
+
+const patchUser = (u) => update('listUsers', {}, (list) => list.map((x) => (x.id === u.id ? u : x)))
 
 const ROLE_OPTIONS = [
   { value: 'user', label: 'Employee' },
@@ -42,9 +45,9 @@ function AddUserSheet({ open, onClose, branches }) {
     setBusy(true)
     setError('')
     try {
-      await call('createUser', form)
+      const u = await call('createUser', form)
+      update('listUsers', {}, (list) => [...list, u])
       toast(`${form.name} added. Share the login with them.`)
-      emitRefresh()
       onClose()
     } catch (err) {
       setError(err.message)
@@ -109,7 +112,6 @@ function UserSheet({ person, onClose, branches, meId }) {
     try {
       await fn()
       toast(message)
-      emitRefresh()
       return true
     } catch (e) {
       setError(e.message)
@@ -138,7 +140,7 @@ function UserSheet({ person, onClose, branches, meId }) {
             style={{ gap: 14 }}
             onSubmit={async (e) => {
               e.preventDefault()
-              if (await run(() => call('updateUser', { id: person.id, ...form }), 'Changes saved')) onClose()
+              if (await run(() => call('updateUser', { id: person.id, ...form }).then(patchUser), 'Changes saved')) onClose()
             }}
           >
             <label className="field">
@@ -174,7 +176,7 @@ function UserSheet({ person, onClose, branches, meId }) {
               className={'btn block ' + (person.active ? 'danger' : 'secondary')}
               disabled={busy}
               onClick={async () => {
-                if (await run(() => call('updateUser', { id: person.id, active: !person.active }), person.active ? `${person.name} disabled` : `${person.name} enabled`)) onClose()
+                if (await run(() => call('updateUser', { id: person.id, active: !person.active }).then(patchUser), person.active ? `${person.name} disabled` : `${person.name} enabled`)) onClose()
               }}
             >
               {person.active ? 'Disable Account' : 'Enable Account'}
@@ -202,9 +204,9 @@ function AddBranchSheet({ open, onClose }) {
           e.preventDefault()
           setBusy(true)
           try {
-            await call('addBranch', { name })
+            const list = await call('addBranch', { name })
+            update('listBranches', {}, () => list)
             toast(`${name} branch added`)
-            emitRefresh()
             onClose()
           } catch (err) {
             setError(err.message)
@@ -226,8 +228,8 @@ function AddBranchSheet({ open, onClose }) {
 
 export default function Team() {
   const { user } = useAuth()
-  const users = useApi('listUsers', {}, 0)
-  const branches = useApi('listBranches', {}, 0)
+  const users = useQuery('listUsers')
+  const branches = useQuery('listBranches')
   const [q, setQ] = useState('')
   const [adding, setAdding] = useState(false)
   const [addingBranch, setAddingBranch] = useState(false)

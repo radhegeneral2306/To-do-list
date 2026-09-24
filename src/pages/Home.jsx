@@ -5,7 +5,8 @@ import TaskList from '../components/TaskList.jsx'
 import { useAssign } from '../components/Layout.jsx'
 import { Avatar, EmptyState, ErrorText, Ring, Sheet, SkeletonRows } from '../components/ui.jsx'
 import { useAuth } from '../auth/AuthContext.jsx'
-import { ROLE_LABELS, greeting, isOverdue, isTop, useApi } from '../utils.js'
+import { ROLE_LABELS, greeting, isOverdue, isTop } from '../utils.js'
+import { useQuery } from '../data.js'
 import { RefreshButton } from './MyTasks.jsx'
 
 const TILES = [
@@ -32,9 +33,9 @@ export default function Home() {
   const top = isTop(user)
   const [branch, setBranch] = useState(top ? 'All' : user.branch)
   const [personId, setPersonId] = useState(null)
-  const branches = useApi('listBranches', {}, 0)
-  const users = useApi('listUsers', {}, 0)
-  const { data, setData, error, loading, reload } = useApi('listTasks', { branch })
+  const branches = useQuery('listBranches')
+  const users = useQuery('listUsers')
+  const { data, error, fetching, reload } = useQuery('listTasks', { branch })
 
   const tasks = data || []
   const totals = countOf(tasks)
@@ -51,11 +52,6 @@ export default function Home() {
 
   const person = people.find((p) => p.id === personId)
   const personTasks = person ? tasks.filter((t) => t.assignedTo === person.id) : null
-  const setPersonTasks = (list) => {
-    const byId = Object.fromEntries(list.map((t) => [t.id, t]))
-    const removed = personTasks.filter((t) => !byId[t.id]).map((t) => t.id)
-    setData(tasks.filter((t) => !removed.includes(t.id)).map((t) => byId[t.id] || t))
-  }
 
   const dateLine = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })
 
@@ -64,7 +60,7 @@ export default function Home() {
       <LargeTitle
         title={`${greeting()}, ${user.name.split(' ')[0]}`}
         subtitle={`${dateLine}${top ? '' : ` · ${user.branch}`}`}
-        actions={<RefreshButton loading={loading} onClick={reload} />}
+        actions={<RefreshButton loading={fetching} onClick={() => { reload(); users.reload(); branches.reload() }} />}
       />
 
       {top && (
@@ -130,12 +126,12 @@ export default function Home() {
               <Plus size={14} weight="bold" /> New
             </button>
           </h2>
-          <TaskList tasks={data} setTasks={setData} showAssignee emptyText="No open tasks in this branch." />
+          <TaskList tasks={data} showAssignee emptyText="No open tasks in this branch." />
         </section>
       </div>
 
       <Sheet open={!!person} onClose={() => setPersonId(null)} title={person?.name || ''}>
-        {personTasks && <TaskList tasks={personTasks} setTasks={setPersonTasks} emptyText={`${person.name.split(' ')[0]} has nothing open.`} />}
+        {personTasks && <TaskList tasks={personTasks} emptyText={`${person.name.split(' ')[0]} has nothing open.`} />}
       </Sheet>
     </>
   )

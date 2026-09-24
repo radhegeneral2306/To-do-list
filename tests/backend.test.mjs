@@ -8,7 +8,7 @@ import { sha256Bytes } from '../src/mock/sha256.js'
 
 const source = readFileSync(new URL('../backend/Code.gs', import.meta.url), 'utf8')
 
-let api, data
+let api, data, google
 
 // Call an action and return its data, or throw with the backend's error message.
 const call = (action, payload = {}, token) => {
@@ -21,7 +21,8 @@ const login = (username, password = 'secret1') => call('login', { username, pass
 let admin, raipurMgr, raipurUser, durgUser, partner
 beforeEach(() => {
   data = {}
-  api = loadBackend(source, createFakeGoogle(data))
+  google = createFakeGoogle(data)
+  api = loadBackend(source, google)
   api.setup()
   admin = login('admin', 'admin123')
   const mk = (username, role, branch) =>
@@ -163,4 +164,62 @@ test('text that looks like a formula or date is stored as plain text', () => {
 test('logout kills the token', () => {
   call('logout', {}, durgUser)
   assert.throws(() => call('me', {}, durgUser), /Session expired/)
+})
+
+test('bootstrap returns everything in one call, scoped by role', () => {
+  const emp = userId(admin, 'raipur.emp')
+  const durg = userId(admin, 'durg.emp')
+  call('createTask', { title: 'R1', branch: 'Raipur', assignedTo: emp }, admin)
+  call('createTask', { title: 'D1', branch: 'Durg', assignedTo: durg }, admin)
+  const all = { branches: true, users: true, tasks: {} }
+
+  const a = call('bootstrap', all, admin)
+  assert.equal(a.me.username, 'admin')
+  assert.equal(a.branches.length, 6)
+  assert.equal(a.users.length, 5)
+  assert.equal(a.tasks.length, 2)
+
+  const m = call('bootstrap', all, raipurMgr)
+  assert.deepEqual(m.tasks.map((t) => t.title), ['R1'])
+  assert.ok(m.users.every((u) => u.branch === 'Raipur'))
+
+  const u = call('bootstrap', all, durgUser)
+  assert.deepEqual(u.tasks.map((t) => t.title), ['D1'])
+  assert.equal(u.users, null) // employees never get the user list
+  assert.equal(call('bootstrap', { tasks: null }, durgUser).tasks, null)
+})
+
+test('cached session is dropped on password reset and logout', () => {
+  call('me', {}, raipurUser) // warms the session cache
+  call('resetPassword', { id: userId(admin, 'raipur.emp'), newPassword: 'reset123' }, admin)
+  assert.throws(() => call('me', {}, raipurUser), /Session expired/)
+
+  call('me', {}, durgUser)
+  call('logout', {}, durgUser)
+  assert.throws(() => call('me', {}, durgUser), /Session expired/)
+})
+
+test('disabled user is blocked even with a warm cache', () => {
+  call('me', {}, raipurUser)
+  call('listTasks', {}, raipurUser)
+  call('updateUser', { id: userId(admin, 'raipur.emp'), active: false }, admin)
+  assert.throws(() => call('me', {}, raipurUser), /Account disabled/)
+})
+
+test('deleting several tasks in a row hits the right rows', () => {
+  const emp = userId(admin, 'raipur.emp')
+  const ids = ['A', 'B', 'C', 'D'].map((t) => call('createTask', { title: t, branch: 'Raipur', assignedTo: emp }, admin).id)
+  call('deleteTask', { id: ids[1] }, admin)
+  call('updateTask', { id: ids[2], remarks: 'still C' }, admin) // row numbers shifted after the delete
+  call('deleteTask', { id: ids[0] }, admin)
+  const left = call('listTasks', {}, admin)
+  assert.deepEqual(left.map((t) => t.title).sort(), ['C', 'D'])
+  assert.equal(left.find((t) => t.title === 'C').remarks, 'still C')
+})
+
+test('new user shows up right away despite the users cache', () => {
+  call('listUsers', {}, admin) // warm cache
+  call('createUser', { username: 'kurud.new', password: 'secret1', name: 'New', role: 'user', branch: 'Kurud' }, admin)
+  assert.ok(call('listUsers', {}, admin).some((u) => u.username === 'kurud.new'))
+  login('kurud.new')
 })

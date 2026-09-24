@@ -3,7 +3,8 @@ import LargeTitle from '../components/LargeTitle.jsx'
 import TaskList from '../components/TaskList.jsx'
 import { ErrorText } from '../components/ui.jsx'
 import { useAuth } from '../auth/AuthContext.jsx'
-import { isOverdue, useApi } from '../utils.js'
+import { isOverdue } from '../utils.js'
+import { useQuery } from '../data.js'
 
 export function RefreshButton({ loading, onClick }) {
   return (
@@ -15,7 +16,7 @@ export function RefreshButton({ loading, onClick }) {
 
 export default function MyTasks() {
   const { user } = useAuth()
-  const { data, setData, error, loading, reload } = useApi('listTasks', { mine: true })
+  const { data, error, fetching, reload } = useQuery('listTasks', { mine: true })
 
   const open = (data || []).filter((t) => t.status !== 'Done').length
   const overdue = (data || []).filter(isOverdue).length
@@ -23,9 +24,9 @@ export default function MyTasks() {
 
   return (
     <>
-      <LargeTitle title="My Tasks" subtitle={subtitle} actions={<RefreshButton loading={loading} onClick={reload} />} />
+      <LargeTitle title="My Tasks" subtitle={subtitle} actions={<RefreshButton loading={fetching} onClick={() => reload()} />} />
       <ErrorText>{error}</ErrorText>
-      <TaskList tasks={data} setTasks={setData} emptyText={`You're all caught up, ${user.name.split(' ')[0]}.`} />
+      <TaskList tasks={data} emptyText={`You're all caught up, ${user.name.split(' ')[0]}.`} />
     </>
   )
 }

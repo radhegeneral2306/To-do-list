@@ -11,7 +11,6 @@ export default function TaskRow({ task, canToggle, showAssignee, onToggle, onOpe
 
   return (
     <motion.div
-      layout={reduce ? false : 'position'}
       initial={false}
       exit={reduce ? undefined : { opacity: 0, x: 40 }}
       transition={{ duration: 0.25 }}
