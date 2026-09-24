@@ -1,8 +1,7 @@
 import { useMemo, useState } from 'react'
 import { AnimatePresence } from 'motion/react'
 import { CheckCircle, MagnifyingGlass, Tray } from '@phosphor-icons/react'
-import { call } from '../api.js'
-import { patchTask, removeTask } from '../data.js'
+import { mutateTask, resolveId } from '../data.js'
 import { useAuth } from '../auth/AuthContext.jsx'
 import { canManageTask, isOverdue, today } from '../utils.js'
 import TaskRow from './TaskRow.jsx'
@@ -44,7 +43,7 @@ export default function TaskList({ tasks, showAssignee, emptyText }) {
   const [openId, setOpenId] = useState(null)
 
   const list = tasks || []
-  const opened = list.find((t) => t.id === openId) || null
+  const opened = list.find((t) => t.id === resolveId(openId)) || null
 
   const groups = useMemo(() => {
     const text = q.trim().toLowerCase()
@@ -55,19 +54,13 @@ export default function TaskList({ tasks, showAssignee, emptyText }) {
     return groupTasks(shown, filter)
   }, [list, filter, q])
 
-  const replace = patchTask
-  const remove = removeTask
-
-  // Optimistic: flip it now, undo if the server says no.
-  async function toggle(task) {
+  // Instant on screen; saved to the Sheet in the background (undone with a message if it fails).
+  function toggle(task) {
     const status = task.status === 'Done' ? 'Pending' : 'Done'
-    replace({ ...task, status, completedAt: status === 'Done' ? new Date().toISOString() : '' })
     try {
-      const updated = await call('updateTask', { id: task.id, status })
-      replace({ ...task, ...updated })
+      mutateTask('update', { id: task.id, status }, user, `update "${task.title}"`)
       if (status === 'Done') toast('Nice work. Task done.')
     } catch (e) {
-      replace(task)
       toast(e.message, 'error')
     }
   }
@@ -121,7 +114,7 @@ export default function TaskList({ tasks, showAssignee, emptyText }) {
         ))
       )}
 
-      <TaskSheet task={opened} onClose={() => setOpenId(null)} onChange={replace} onDelete={remove} />
+      <TaskSheet task={opened} onClose={() => setOpenId(null)} />
     </div>
   )
 }

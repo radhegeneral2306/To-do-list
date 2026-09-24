@@ -105,13 +105,19 @@ var ACTIONS = {
   createUser: createUser_,
   updateUser: updateUser_,
   resetPassword: resetPassword_,
-  bootstrap: bootstrap_
+  bootstrap: bootstrap_,
+  applyOps: applyOps_
 };
 
 var WRITE_ACTIONS = {
   login: true, logout: true, changePassword: true, addBranch: true, createTask: true,
-  updateTask: true, deleteTask: true, createUser: true, updateUser: true, resetPassword: true
+  updateTask: true, deleteTask: true, createUser: true, updateUser: true, resetPassword: true,
+  applyOps: true
 };
+
+// Task changes the app can queue and send together (see applyOps_).
+var OP_HANDLERS = { createTask: createTask_, updateTask: updateTask_, deleteTask: deleteTask_ };
+var MAX_OPS = 20;
 
 function handle_(action, payload, token) {
   MEMO_ = {};
@@ -243,8 +249,38 @@ function listTasks_(p, user) {
   });
 }
 
+/**
+ * Several queued task changes in ONE request (one lock, one Sheet read).
+ * Each op is checked exactly like its single action. One failing op doesn't stop the rest.
+ * p.ops: [{ type: 'createTask' | 'updateTask' | 'deleteTask', payload: {...} }]
+ */
+function applyOps_(p, user) {
+  var ops = p.ops || [];
+  if (ops.length > MAX_OPS) throw new Error('Too many changes at once');
+  return ops.map(function (op) {
+    var fn = OP_HANDLERS[op && op.type];
+    if (!fn) return { ok: false, error: 'Unknown change: ' + (op && op.type) };
+    try {
+      return { ok: true, data: fn(op.payload || {}, user) };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  });
+}
+
 function createTask_(p, user) {
   requireAssigner_(user);
+
+  // The app makes the id itself, so a retried request can't create a duplicate.
+  if (p.id !== undefined && p.id !== '') {
+    if (!/^T[a-z0-9]{8,32}$/i.test(String(p.id))) throw new Error('Invalid task id');
+    var existing = find_(readAll_('Tasks'), function (t) { return t.id === p.id; });
+    if (existing) {
+      if (existing.assignedBy !== user.id) throw new Error('Task id already used');
+      return strip_(existing);
+    }
+  }
+
   var title = clean_(p.title);
   if (!title) throw new Error('Task title is required');
   var branch = clean_(p.branch);
@@ -253,7 +289,7 @@ function createTask_(p, user) {
 
   var now = new Date().toISOString();
   var task = {
-    id: newId_('T'),
+    id: p.id ? String(p.id) : newId_('T'),
     title: title,
     description: clean_(p.description),
     branch: branch,
@@ -314,7 +350,7 @@ function updateTask_(p, user) {
 
 function deleteTask_(p, user) {
   var task = find_(readAll_('Tasks'), function (t) { return t.id === p.id; });
-  if (!task) throw new Error('Task not found');
+  if (!task) return true; // already gone (e.g. a retried request): same end result
   if (!(isTop_(user) || (user.role === 'manager' && task.branch === user.branch))) {
     throw new Error('You cannot delete this task');
   }

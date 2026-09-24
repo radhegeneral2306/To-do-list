@@ -1,13 +1,13 @@
-import { createContext, useContext, useState } from 'react'
+import { createContext, useContext, useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { motion, useReducedMotion } from 'motion/react'
-import { CheckSquareOffset, CloudSlash, House, ListChecks, Plus, UserCircle, UsersThree } from '@phosphor-icons/react'
-import { useOnline } from '../data.js'
+import { CheckSquareOffset, CloudArrowUp, CloudSlash, House, ListChecks, Plus, UserCircle, UsersThree } from '@phosphor-icons/react'
+import { setNotifier, useOnline, usePending } from '../data.js'
 import { useAuth } from '../auth/AuthContext.jsx'
 import { DEMO } from '../api.js'
 import { canAssign, isTop } from '../utils.js'
 import AssignForm from './AssignForm.jsx'
-import { Sheet } from './ui.jsx'
+import { Sheet, useToast } from './ui.jsx'
 
 const AssignContext = createContext(() => {})
 /** Opens the "New Task" sheet from anywhere. */
@@ -18,6 +18,9 @@ export default function Layout({ children }) {
   const reduce = useReducedMotion()
   const [assignOpen, setAssignOpen] = useState(false)
   const online = useOnline()
+  const pending = usePending()
+  const toast = useToast()
+  useEffect(() => setNotifier(toast), [toast])
 
   const tabs = [
     canAssign(user) && ['/home', 'Home', House],
@@ -30,9 +33,14 @@ export default function Layout({ children }) {
   return (
     <AssignContext.Provider value={() => setAssignOpen(true)}>
       <div className="ambient" />
-      {!online && (
+      {!online ? (
         <div className="offline-pill" role="status">
-          <CloudSlash size={16} weight="bold" /> Offline. Showing saved data.
+          <CloudSlash size={16} weight="bold" />
+          {pending ? `Offline. ${pending} change${pending > 1 ? 's' : ''} waiting.` : 'Offline. Showing saved data.'}
+        </div>
+      ) : pending > 0 && (
+        <div className="offline-pill saving" role="status">
+          <CloudArrowUp size={16} weight="bold" /> Saving {pending} change{pending > 1 ? 's' : ''}…
         </div>
       )}
       <div className="shell">

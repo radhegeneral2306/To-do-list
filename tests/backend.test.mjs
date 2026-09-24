@@ -126,6 +126,7 @@ test('manager cannot touch other branch tasks', () => {
   assert.throws(() => call('updateTask', { id: t.id, status: 'Done' }, raipurMgr), /cannot edit/)
   assert.throws(() => call('deleteTask', { id: t.id }, raipurMgr), /cannot delete/)
   call('deleteTask', { id: t.id }, admin)
+  call('deleteTask', { id: t.id }, admin) // second delete is a harmless no-op
   assert.equal(call('listTasks', {}, admin).length, 0)
 })
 
@@ -222,4 +223,48 @@ test('new user shows up right away despite the users cache', () => {
   call('createUser', { username: 'kurud.new', password: 'secret1', name: 'New', role: 'user', branch: 'Kurud' }, admin)
   assert.ok(call('listUsers', {}, admin).some((u) => u.username === 'kurud.new'))
   login('kurud.new')
+})
+
+test('applyOps runs changes in order with one result each', () => {
+  const emp = userId(admin, 'raipur.emp')
+  const id = 'Tabc12345xyz'
+  const res = call('applyOps', { ops: [
+    { type: 'createTask', payload: { id, title: 'Batch', branch: 'Raipur', assignedTo: emp } },
+    { type: 'updateTask', payload: { id, status: 'In Progress', remarks: 'started' } },
+    { type: 'updateTask', payload: { id: 'Tnope0000000', status: 'Done' } },
+    { type: 'deleteTask', payload: { id: 'Tgone0000000' } },
+    { type: 'hackTask', payload: {} },
+  ] }, admin)
+  assert.deepEqual(res.map((r) => r.ok), [true, true, false, true, false])
+  assert.match(res[2].error, /not found/)
+  const t = call('listTasks', {}, admin).find((x) => x.id === id)
+  assert.equal(t.status, 'In Progress')
+  assert.equal(t.remarks, 'started')
+})
+
+test('same client id twice creates one task; foreign or bad ids are rejected', () => {
+  const emp = userId(admin, 'raipur.emp')
+  const p = { id: 'Tdup00000001', title: 'Once', branch: 'Raipur', assignedTo: emp }
+  const a = call('createTask', p, admin)
+  const b = call('createTask', p, admin)
+  assert.equal(a.id, 'Tdup00000001')
+  assert.equal(b.id, a.id)
+  assert.equal(call('listTasks', {}, admin).filter((t) => t.title === 'Once').length, 1)
+  assert.throws(() => call('createTask', p, raipurMgr), /already used/)
+  assert.throws(() => call('createTask', { ...p, id: 'bad id!' }, admin), /Invalid task id/)
+})
+
+test('applyOps keeps every permission check', () => {
+  const durg = userId(admin, 'durg.emp')
+  const t = call('createTask', { title: 'D', branch: 'Durg', assignedTo: durg }, admin)
+  const res = call('applyOps', { ops: [
+    { type: 'deleteTask', payload: { id: t.id } },
+    { type: 'createTask', payload: { title: 'x', branch: 'Durg', assignedTo: durg } },
+  ] }, raipurMgr)
+  assert.deepEqual(res.map((r) => r.ok), [false, false])
+  assert.match(res[0].error, /cannot delete/)
+  const own = call('applyOps', { ops: [{ type: 'createTask', payload: { title: 'x', branch: 'Raipur', assignedTo: durg } }] }, durgUser)
+  assert.equal(own[0].ok, false)
+  assert.match(own[0].error, /Only Admin/)
+  assert.equal(call('listTasks', {}, admin).filter((x) => x.title === 'x').length, 0)
 })

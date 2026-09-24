@@ -189,6 +189,7 @@ button { cursor: pointer; }
   white-space: nowrap;
   pointer-events: none;
 }
+.offline-pill.saving { color: var(--accent-text); }
 @media (min-width: 1024px) { .offline-pill { bottom: 20px; left: calc(50% + 150px); } }
 
 @media (prefers-reduced-transparency: reduce) {

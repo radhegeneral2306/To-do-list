@@ -1,17 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { PencilSimple, Trash } from '@phosphor-icons/react'
-import { call } from '../api.js'
+import { mutateTask } from '../data.js'
 import { useAuth } from '../auth/AuthContext.jsx'
 import { PRIORITIES, STATUSES, canManageTask, formatDate, isOverdue, relativeDue } from '../utils.js'
 import { ErrorText, Segmented, Sheet, useToast } from './ui.jsx'
 
 /** Task details: change status, write remarks, and (for managers) edit or delete. */
-export default function TaskSheet({ task, onClose, onChange, onDelete }) {
+export default function TaskSheet({ task, onClose }) {
   const { user } = useAuth()
   const toast = useToast()
   const [remarks, setRemarks] = useState('')
   const [edit, setEdit] = useState(null)
-  const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [confirmDelete, setConfirmDelete] = useState(false)
 
@@ -30,33 +29,26 @@ export default function TaskSheet({ task, onClose, onChange, onDelete }) {
   const manage = t && canManageTask(user, t)
   const canUpdate = t && (manage || t.assignedTo === user.id)
 
-  async function save(changes, message) {
-    setBusy(true)
+  // Changes show at once; the Sheet is updated in the background (undone with a message if it fails).
+  function save(changes, message) {
     setError('')
     try {
-      const updated = await call('updateTask', { id: t.id, ...changes })
-      onChange({ ...t, ...updated })
+      mutateTask('update', { id: t.id, ...changes }, user, `update "${t.title}"`)
       if (message) toast(message)
       return true
     } catch (e) {
       setError(e.message)
       return false
-    } finally {
-      setBusy(false)
     }
   }
 
-  async function remove() {
-    setBusy(true)
+  function remove() {
     try {
-      await call('deleteTask', { id: t.id })
-      onDelete(t.id)
+      mutateTask('delete', { id: t.id }, user, `delete "${t.title}"`)
       toast('Task deleted')
       onClose()
     } catch (e) {
       setError(e.message)
-    } finally {
-      setBusy(false)
     }
   }
 
@@ -70,7 +62,7 @@ export default function TaskSheet({ task, onClose, onChange, onDelete }) {
               style={{ gap: 14 }}
               onSubmit={async (e) => {
                 e.preventDefault()
-                if (await save(edit, 'Task updated')) setEdit(null)
+                if (save(edit, 'Task updated')) setEdit(null)
               }}
             >
               <label className="field">
@@ -90,7 +82,7 @@ export default function TaskSheet({ task, onClose, onChange, onDelete }) {
                 <input className="input" type="date" value={edit.dueDate} onChange={(e) => setEdit({ ...edit, dueDate: e.target.value })} />
               </label>
               <ErrorText>{error}</ErrorText>
-              <button className="btn block" disabled={busy}>{busy ? 'Saving…' : 'Save Changes'}</button>
+              <button className="btn block">Save Changes</button>
               <button type="button" className="btn block secondary" onClick={() => setEdit(null)}>Cancel</button>
             </form>
           ) : (
@@ -129,8 +121,8 @@ export default function TaskSheet({ task, onClose, onChange, onDelete }) {
                   <span>Remarks</span>
                   <textarea className="input" placeholder="Add an update for your manager" value={remarks} onChange={(e) => setRemarks(e.target.value)} />
                   {remarks !== (t.remarks || '') && (
-                    <button className="btn block" disabled={busy} onClick={() => save({ remarks }, 'Remarks saved')}>
-                      {busy ? 'Saving…' : 'Save Remarks'}
+                    <button className="btn block" onClick={() => save({ remarks }, 'Remarks saved')}>
+                      Save Remarks
                     </button>
                   )}
                 </div>
@@ -149,7 +141,7 @@ export default function TaskSheet({ task, onClose, onChange, onDelete }) {
                     <PencilSimple size={20} /> Edit Task
                   </button>
                   {confirmDelete ? (
-                    <button className="cell danger" disabled={busy} onClick={remove}>
+                    <button className="cell danger" onClick={remove}>
                       <Trash size={20} weight="fill" /> Tap again to delete
                     </button>
                   ) : (
