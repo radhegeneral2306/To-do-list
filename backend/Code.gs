@@ -16,6 +16,13 @@ var STATUSES = ['Pending', 'In Progress', 'Done'];
 var PRIORITIES = ['Low', 'Medium', 'High'];
 var ALL_BRANCHES = 'All';
 
+// Speed: Users/Branches are cached for a short time, session lookups a bit longer.
+// Every write clears the cache, and password reset / logout evict the session.
+var SHEET_CACHE_SECONDS = 120;
+var SESSION_CACHE_SECONDS = 600;
+var CACHED_SHEETS = { Users: true, Branches: true };
+var MEMO_ = {}; // per-request copy of each sheet, reset in handle_
+
 var HEADERS = {
   Users: ['id', 'username', 'passwordHash', 'salt', 'name', 'role', 'branch', 'active', 'createdAt'],
   Tasks: ['id', 'title', 'description', 'branch', 'assignedTo', 'assignedBy', 'priority', 'status',
@@ -30,6 +37,7 @@ var HEADERS = {
 // ---------------------------------------------------------------------------
 
 function setup() {
+  MEMO_ = {};
   var ss = ss_();
   Object.keys(HEADERS).forEach(function (name) {
     var sheet = ss.getSheetByName(name) || ss.insertSheet(name);
@@ -96,7 +104,8 @@ var ACTIONS = {
   listUsers: listUsers_,
   createUser: createUser_,
   updateUser: updateUser_,
-  resetPassword: resetPassword_
+  resetPassword: resetPassword_,
+  bootstrap: bootstrap_
 };
 
 var WRITE_ACTIONS = {
@@ -105,6 +114,7 @@ var WRITE_ACTIONS = {
 };
 
 function handle_(action, payload, token) {
+  MEMO_ = {};
   var fn = PUBLIC_ACTIONS[action] || ACTIONS[action];
   if (!fn) throw new Error('Unknown action: ' + action);
 
@@ -138,7 +148,7 @@ function login_(p) {
   var now = Date.now();
   var sessions = readAll_('Sessions');
   for (var i = sessions.length - 1; i >= 0; i--) {
-    if (Number(sessions[i].expiresAt) < now) getSheet_('Sessions').deleteRow(sessions[i]._row);
+    if (Number(sessions[i].expiresAt) < now) deleteRow_('Sessions', sessions[i]._row);
   }
 
   var token = Utilities.getUuid() + Utilities.getUuid();
@@ -148,7 +158,11 @@ function login_(p) {
 
 function auth_(token) {
   if (!token) throw new Error('Please login');
-  var session = find_(readAll_('Sessions'), function (s) { return s.token === token; });
+  var session = cacheGet_('sess:' + token);
+  if (!session) {
+    session = find_(readAll_('Sessions'), function (s) { return s.token === token; });
+    if (session) cachePut_('sess:' + token, { userId: session.userId, expiresAt: session.expiresAt }, SESSION_CACHE_SECONDS);
+  }
   if (!session || Number(session.expiresAt) < Date.now()) throw new Error('Session expired, please login again');
   var user = find_(readAll_('Users'), function (u) { return u.id === session.userId; });
   if (!user || user.active !== 'yes') throw new Error('Account disabled');
@@ -159,9 +173,24 @@ function me_(p, user) {
   return publicUser_(user);
 }
 
+/**
+ * Everything a screen needs in ONE request (each Apps Script call costs ~1-2 s).
+ * p: { branches: bool, users: bool, tasks: <listTasks payload> | null }
+ */
+function bootstrap_(p, user) {
+  var assigner = isTop_(user) || user.role === 'manager';
+  return {
+    me: publicUser_(user),
+    branches: p.branches ? listBranches_() : null,
+    users: p.users && assigner ? listUsers_({}, user) : null,
+    tasks: p.tasks ? listTasks_(p.tasks, user) : null
+  };
+}
+
 function logout_(p, user, token) {
   var session = find_(readAll_('Sessions'), function (s) { return s.token === token; });
-  if (session) getSheet_('Sessions').deleteRow(session._row);
+  if (session) deleteRow_('Sessions', session._row);
+  forgetSession_(token);
   return true;
 }
 
@@ -289,7 +318,7 @@ function deleteTask_(p, user) {
   if (!(isTop_(user) || (user.role === 'manager' && task.branch === user.branch))) {
     throw new Error('You cannot delete this task');
   }
-  getSheet_('Tasks').deleteRow(task._row);
+  deleteRow_('Tasks', task._row);
   return true;
 }
 
@@ -382,7 +411,10 @@ function setPassword_(target, password, keepToken) {
   var sessions = readAll_('Sessions');
   for (var i = sessions.length - 1; i >= 0; i--) {
     var s = sessions[i];
-    if (s.userId === target.id && s.token !== keepToken) getSheet_('Sessions').deleteRow(s._row);
+    if (s.userId === target.id && s.token !== keepToken) {
+      deleteRow_('Sessions', s._row);
+      forgetSession_(s.token);
+    }
   }
 }
 
@@ -442,6 +474,17 @@ function getSheet_(name) {
 
 /** All rows as objects. `_row` is the real sheet row number (header is row 1). */
 function readAll_(name) {
+  if (MEMO_[name]) return MEMO_[name];
+  var rows = CACHED_SHEETS[name] ? cacheGet_('sheet:' + name) : null;
+  if (!rows) {
+    rows = readSheet_(name);
+    if (CACHED_SHEETS[name]) cachePut_('sheet:' + name, rows, SHEET_CACHE_SECONDS);
+  }
+  MEMO_[name] = rows;
+  return rows;
+}
+
+function readSheet_(name) {
   var sheet = getSheet_(name);
   var headers = HEADERS[name];
   var last = sheet.getLastRow();
@@ -455,6 +498,34 @@ function readAll_(name) {
     rows.push(obj);
   }
   return rows;
+}
+
+/** Call after every write, so later reads in this request (and other requests) see fresh data. */
+function changed_(name) {
+  delete MEMO_[name];
+  if (CACHED_SHEETS[name]) {
+    try { CacheService.getScriptCache().remove('sheet:' + name); } catch (e) {}
+  }
+}
+
+function cacheGet_(key) {
+  try {
+    var v = CacheService.getScriptCache().get(key);
+    return v ? JSON.parse(v) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function cachePut_(key, value, seconds) {
+  try {
+    var json = JSON.stringify(value);
+    if (json.length < 90000) CacheService.getScriptCache().put(key, json, seconds); // 100 KB limit per key
+  } catch (e) {}
+}
+
+function forgetSession_(token) {
+  try { CacheService.getScriptCache().remove('sess:' + token); } catch (e) {}
 }
 
 function cell_(v) {
@@ -472,10 +543,17 @@ function toRow_(name, obj) {
 
 function append_(name, obj) {
   getSheet_(name).appendRow(toRow_(name, obj));
+  changed_(name);
 }
 
 function write_(name, row, obj) {
   getSheet_(name).getRange(row, 1, 1, HEADERS[name].length).setValues([toRow_(name, obj)]);
+  changed_(name);
+}
+
+function deleteRow_(name, row) {
+  getSheet_(name).deleteRow(row);
+  changed_(name);
 }
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,3 @@
-import { useCallback, useEffect, useState } from 'react'
-import { call } from './api.js'
 
 export const ROLE_LABELS = { admin: 'Admin', partner: 'Partner', manager: 'Branch Manager', user: 'Employee' }
 export const STATUSES = ['Pending', 'In Progress', 'Done']
@@ -21,10 +19,6 @@ export function formatDate(s) {
   const d = new Date(s.length === 10 ? s + 'T00:00:00' : s)
   return isNaN(d) ? s : d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
 }
-
-const REFRESH_EVENT = 'app:refresh'
-/** Tell every open screen to reload its data (e.g. after assigning a task). */
-export const emitRefresh = () => window.dispatchEvent(new Event(REFRESH_EVENT))
 
 export function addDays(n) {
   const d = new Date(Date.now() + n * 86400000)
@@ -48,36 +42,4 @@ export const initials = (name = '') =>
 export function greeting() {
   const h = new Date().getHours()
   return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'
-}
-
-/** Loads data from an action, reloads when `payload` changes, and every `refreshMs`. */
-export function useApi(action, payload = {}, refreshMs = 60000) {
-  const key = JSON.stringify(payload)
-  const [data, setData] = useState(null)
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(true)
-
-  const reload = useCallback(async () => {
-    setLoading(true)
-    try {
-      setData(await call(action, JSON.parse(key)))
-      setError('')
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setLoading(false)
-    }
-  }, [action, key])
-
-  useEffect(() => {
-    reload()
-    window.addEventListener(REFRESH_EVENT, reload)
-    const id = refreshMs ? setInterval(reload, refreshMs) : null
-    return () => {
-      window.removeEventListener(REFRESH_EVENT, reload)
-      if (id) clearInterval(id)
-    }
-  }, [reload, refreshMs])
-
-  return { data, setData, error, loading, reload }
 }

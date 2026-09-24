@@ -55,7 +55,7 @@ function seed() {
 }
 
 export async function call(action, payload, token) {
-  await new Promise((r) => setTimeout(r, 150)) // feel a bit like a real network
+  await new Promise((r) => setTimeout(r, 1200)) // about as slow as a real Apps Script call
   const res = backend.call(action, payload, token)
   if (dirty) { saveData(data); dirty = false }
   return res

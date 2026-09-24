@@ -1,7 +1,8 @@
 import { createContext, useContext, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { motion, useReducedMotion } from 'motion/react'
-import { CheckSquareOffset, House, ListChecks, Plus, UserCircle, UsersThree } from '@phosphor-icons/react'
+import { CheckSquareOffset, CloudSlash, House, ListChecks, Plus, UserCircle, UsersThree } from '@phosphor-icons/react'
+import { useOnline } from '../data.js'
 import { useAuth } from '../auth/AuthContext.jsx'
 import { DEMO } from '../api.js'
 import { canAssign, isTop } from '../utils.js'
@@ -16,6 +17,7 @@ export default function Layout({ children }) {
   const { user } = useAuth()
   const reduce = useReducedMotion()
   const [assignOpen, setAssignOpen] = useState(false)
+  const online = useOnline()
 
   const tabs = [
     canAssign(user) && ['/home', 'Home', House],
@@ -28,6 +30,11 @@ export default function Layout({ children }) {
   return (
     <AssignContext.Provider value={() => setAssignOpen(true)}>
       <div className="ambient" />
+      {!online && (
+        <div className="offline-pill" role="status">
+          <CloudSlash size={16} weight="bold" /> Offline. Showing saved data.
+        </div>
+      )}
       <div className="shell">
         <nav className="tabbar glass" aria-label="Main" data-count={tabs.length}>
           <div className="sidebar-brand">

@@ -80,7 +80,20 @@ export function createFakeGoogle(data = {}, onChange = () => {}) {
       return (ch === 'x' ? r : (r & 0x3) | 0x8).toString(16)
     })
 
+  // In-memory stand-in for Apps Script's CacheService (values are strings, with expiry).
+  const store = new Map()
+  const scriptCache = {
+    get: (k) => {
+      const e = store.get(k)
+      if (!e || e.exp < Date.now()) return null
+      return e.v
+    },
+    put: (k, v, seconds = 600) => { store.set(k, { v: String(v), exp: Date.now() + seconds * 1000 }) },
+    remove: (k) => { store.delete(k) },
+  }
+
   return {
+    CacheService: { getScriptCache: () => scriptCache },
     SpreadsheetApp: {
       getActiveSpreadsheet: () => spreadsheet,
       getUi: () => ({ alert: () => {} }),
@@ -102,7 +115,7 @@ export function createFakeGoogle(data = {}, onChange = () => {}) {
   }
 }
 
-const GLOBALS = ['SpreadsheetApp', 'Utilities', 'LockService', 'ContentService', 'Logger']
+const GLOBALS = ['SpreadsheetApp', 'Utilities', 'LockService', 'ContentService', 'Logger', 'CacheService']
 
 /** Runs the Apps Script source against the fake services and returns its entry points. */
 export function loadBackend(source, fakeGoogle) {

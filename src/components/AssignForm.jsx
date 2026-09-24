@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { CheckCircle, Circle } from '@phosphor-icons/react'
 import { call } from '../api.js'
 import { useAuth } from '../auth/AuthContext.jsx'
-import { PRIORITIES, ROLE_LABELS, addDays, emitRefresh, isTop, useApi } from '../utils.js'
+import { PRIORITIES, ROLE_LABELS, addDays, isTop } from '../utils.js'
+import { insertTask, useQuery } from '../data.js'
 import { Avatar, ErrorText, Segmented, SkeletonRows, useToast } from './ui.jsx'
 
 const DUE_CHIPS = [
@@ -23,8 +24,8 @@ export default function AssignForm({ onDone }) {
   const [pickDate, setPickDate] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const branches = useApi('listBranches', {}, 0)
-  const users = useApi('listUsers', {}, 0)
+  const branches = useQuery('listBranches')
+  const users = useQuery('listUsers')
 
   const active = (users.data || []).filter((u) => u.active)
   const people = [...active.filter((u) => u.branch === branch), ...active.filter((u) => u.branch === 'All')]
@@ -40,7 +41,7 @@ export default function AssignForm({ onDone }) {
       const t = await call('createTask', { ...form, branch })
       const who = active.find((u) => u.id === t.assignedTo)
       toast(`Assigned to ${who?.name || 'team member'}`)
-      emitRefresh()
+      insertTask(t, user)
       setForm({ ...EMPTY, priority: form.priority })
       setPickDate(false)
       onDone?.()

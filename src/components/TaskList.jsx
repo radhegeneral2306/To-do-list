@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { AnimatePresence } from 'motion/react'
 import { CheckCircle, MagnifyingGlass, Tray } from '@phosphor-icons/react'
 import { call } from '../api.js'
+import { patchTask, removeTask } from '../data.js'
 import { useAuth } from '../auth/AuthContext.jsx'
 import { canManageTask, isOverdue, today } from '../utils.js'
 import TaskRow from './TaskRow.jsx'
@@ -34,8 +35,8 @@ const FILTERS = [
   ['All', () => true],
 ]
 
-/** Task list with filter, search, one-tap done and a detail sheet. `setTasks` keeps the parent in sync. */
-export default function TaskList({ tasks, setTasks, showAssignee, emptyText }) {
+/** Task list with filter, search, one-tap done and a detail sheet. Edits update every cached list. */
+export default function TaskList({ tasks, showAssignee, emptyText }) {
   const { user } = useAuth()
   const toast = useToast()
   const [filter, setFilter] = useState('Open')
@@ -54,8 +55,8 @@ export default function TaskList({ tasks, setTasks, showAssignee, emptyText }) {
     return groupTasks(shown, filter)
   }, [list, filter, q])
 
-  const replace = (t) => setTasks(list.map((x) => (x.id === t.id ? t : x)))
-  const remove = (id) => setTasks(list.filter((x) => x.id !== id))
+  const replace = patchTask
+  const remove = removeTask
 
   // Optimistic: flip it now, undo if the server says no.
   async function toggle(task) {
