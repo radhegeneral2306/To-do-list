@@ -47,7 +47,7 @@ test('sha256 matches node crypto', () => {
 })
 
 test('setup creates sheets, branches and admin', () => {
-  assert.deepEqual(Object.keys(data).sort(), ['Branches', 'Sessions', 'Tasks', 'Users'])
+  assert.deepEqual(Object.keys(data).filter((k) => !k.startsWith('__')).sort(), ['Archive', 'Branches', 'Sessions', 'Tasks', 'Users'])
   assert.deepEqual(call('listBranches', {}, admin), ['Raipur', 'Durg', 'Jagdalpur', 'Rajim', 'Kurud', 'Hardware'])
   // Password is never stored in plain text
   assert.ok(!JSON.stringify(data.Users).includes('admin123'))
@@ -267,4 +267,61 @@ test('applyOps keeps every permission check', () => {
   assert.equal(own[0].ok, false)
   assert.match(own[0].error, /Only Admin/)
   assert.equal(call('listTasks', {}, admin).filter((x) => x.title === 'x').length, 0)
+})
+
+test('ping reports a version that changes on every data write', () => {
+  const emp = userId(admin, 'raipur.emp')
+  const v0 = call('ping', {}, raipurUser).v
+  const t = call('createTask', { title: 'P', branch: 'Raipur', assignedTo: emp }, admin)
+  const v1 = call('ping', {}, raipurUser).v
+  assert.notEqual(v1, v0)
+  call('updateTask', { id: t.id, status: 'Done' }, raipurUser)
+  const v2 = call('ping', {}, admin).v
+  assert.notEqual(v2, v1)
+  call('listTasks', {}, admin) // reads don't change it
+  assert.equal(call('ping', {}, admin).v, v2)
+  assert.throws(() => call('ping', {}), /Please login/)
+})
+
+test('writes return the version before and after, reads return none', () => {
+  const emp = userId(admin, 'raipur.emp')
+  const before = call('ping', {}, admin).v
+  const res = api.call('createTask', { title: 'V', branch: 'Raipur', assignedTo: emp }, admin)
+  assert.equal(res.version.before, before)
+  assert.notEqual(res.version.v, before)
+  const read = api.call('listTasks', {}, admin)
+  assert.equal(read.version, undefined)
+  assert.equal(read.v, res.version.v) // reads say which version they reflect
+  assert.equal(api.call('me', {}, admin).v, undefined)
+})
+
+test('old Done tasks move to Archive once a day; everything else stays', () => {
+  const emp = userId(admin, 'raipur.emp')
+  const oldDone = call('createTask', { title: 'Old done', branch: 'Raipur', assignedTo: emp }, admin)
+  const newDone = call('createTask', { title: 'New done', branch: 'Raipur', assignedTo: emp }, admin)
+  const oldOpen = call('createTask', { title: 'Old open', branch: 'Raipur', assignedTo: emp }, admin)
+  call('updateTask', { id: oldDone.id, status: 'Done' }, admin)
+  call('updateTask', { id: newDone.id, status: 'Done' }, admin)
+  // Pretend oldDone was finished 40 days ago and oldOpen was created 40 days ago.
+  const long = new Date(Date.now() - 40 * 86400000).toISOString()
+  const col = (name) => ['id', 'title', 'description', 'branch', 'assignedTo', 'assignedBy', 'priority', 'status', 'dueDate', 'remarks', 'createdAt', 'updatedAt', 'completedAt'].indexOf(name)
+  data.Tasks.find((r) => r[0] === oldDone.id)[col('completedAt')] = long
+  data.Tasks.find((r) => r[0] === oldOpen.id)[col('createdAt')] = long
+  data.__props.lastArchive = '2000-01-01'
+
+  call('updateTask', { id: newDone.id, remarks: 'triggers the daily archive' }, admin)
+  const titles = call('listTasks', {}, admin).map((t) => t.title).sort()
+  assert.deepEqual(titles, ['New done', 'Old open'])
+  assert.deepEqual(data.Archive.slice(1).map((r) => r[1]), ['Old done'])
+  assert.equal(data.Archive[1][col('status')], 'Done')
+
+  // Runs only once per day
+  const again = call('createTask', { title: 'Another', branch: 'Raipur', assignedTo: emp }, admin)
+  call('updateTask', { id: again.id, status: 'Done' }, admin)
+  data.Tasks.find((r) => r[0] === again.id)[col('completedAt')] = long
+  call('updateTask', { id: newDone.id, remarks: 'second write today' }, admin)
+  assert.ok(call('listTasks', {}, admin).some((t) => t.id === again.id))
+  // Row numbers after the rewrite are still right
+  call('updateTask', { id: oldOpen.id, status: 'In Progress' }, admin)
+  assert.equal(call('listTasks', {}, admin).find((t) => t.id === oldOpen.id).status, 'In Progress')
 })

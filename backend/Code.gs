@@ -23,6 +23,16 @@ var SESSION_CACHE_SECONDS = 600;
 var CACHED_SHEETS = { Users: true, Branches: true };
 var MEMO_ = {}; // per-request copy of each sheet, reset in handle_
 
+// Speed: the app asks "did anything change?" (ping) instead of reloading everything.
+// dataVersion changes on every write to Tasks/Users/Branches.
+var VERSIONED_SHEETS = { Tasks: true, Users: true, Branches: true };
+var DIRTY_ = false;
+// Reads that return data also return the version they reflect (taken before reading).
+var READS_WITH_VERSION = { bootstrap: true, listTasks: true, listUsers: true, listBranches: true };
+
+// Done tasks older than this move to the Archive tab (once a day), so reads stay fast.
+var ARCHIVE_AFTER_DAYS = 30;
+
 var HEADERS = {
   Users: ['id', 'username', 'passwordHash', 'salt', 'name', 'role', 'branch', 'active', 'createdAt'],
   Tasks: ['id', 'title', 'description', 'branch', 'assignedTo', 'assignedBy', 'priority', 'status',
@@ -30,6 +40,7 @@ var HEADERS = {
   Sessions: ['token', 'userId', 'expiresAt'],
   Branches: ['name']
 };
+HEADERS.Archive = HEADERS.Tasks;
 
 // ---------------------------------------------------------------------------
 // One-time setup. Easiest: reload the Sheet and use the menu  Task App → Run setup.
@@ -81,7 +92,10 @@ function doPost(e) {
   var out;
   try {
     var req = JSON.parse(e.postData.contents);
-    out = { ok: true, data: handle_(req.action, req.payload || {}, req.token) };
+    var res = handle_(req.action, req.payload || {}, req.token);
+    out = { ok: true, data: res.data };
+    if (res.version) out.version = res.version;
+    if (res.readVersion) out.v = res.readVersion;
   } catch (err) {
     out = { ok: false, error: String((err && err.message) || err) };
   }
@@ -106,7 +120,8 @@ var ACTIONS = {
   updateUser: updateUser_,
   resetPassword: resetPassword_,
   bootstrap: bootstrap_,
-  applyOps: applyOps_
+  applyOps: applyOps_,
+  ping: ping_
 };
 
 var WRITE_ACTIONS = {
@@ -119,8 +134,10 @@ var WRITE_ACTIONS = {
 var OP_HANDLERS = { createTask: createTask_, updateTask: updateTask_, deleteTask: deleteTask_ };
 var MAX_OPS = 20;
 
+/** Returns { data, version } — version is set only when this request changed data. */
 function handle_(action, payload, token) {
   MEMO_ = {};
+  DIRTY_ = false;
   var fn = PUBLIC_ACTIONS[action] || ACTIONS[action];
   if (!fn) throw new Error('Unknown action: ' + action);
 
@@ -131,9 +148,24 @@ function handle_(action, payload, token) {
     lock.waitLock(20000);
   }
   try {
-    if (PUBLIC_ACTIONS[action]) return fn(payload);
-    var session = auth_(token);
-    return fn(payload, session.user, session.token);
+    var data;
+    var readVersion = READS_WITH_VERSION[action] ? getVersion_() : null;
+    if (PUBLIC_ACTIONS[action]) {
+      data = fn(payload);
+    } else {
+      var session = auth_(token);
+      data = fn(payload, session.user, session.token);
+    }
+    if (lock) {
+      try { archiveOldTasks_(); } catch (e) { Logger.log('Archive skipped: ' + e); }
+    }
+    var version = null;
+    if (DIRTY_) {
+      // "before" lets the app tell whether someone else also changed data meanwhile.
+      var before = getVersion_();
+      version = { before: before, v: bumpVersion_() };
+    }
+    return { data: data, version: version, readVersion: readVersion };
   } finally {
     if (lock) lock.releaseLock();
   }
@@ -177,6 +209,64 @@ function auth_(token) {
 
 function me_(p, user) {
   return publicUser_(user);
+}
+
+/** Cheap "did anything change?" check: no Sheet read. */
+function ping_() {
+  return { v: getVersion_() };
+}
+
+function props_() {
+  return PropertiesService.getScriptProperties();
+}
+
+function getVersion_() {
+  return props_().getProperty('dataVersion') || '0';
+}
+
+function bumpVersion_() {
+  // Always higher than the last one, even for two writes in the same millisecond.
+  var v = String(Math.max(Date.now(), Number(getVersion_()) + 1));
+  props_().setProperty('dataVersion', v);
+  return v;
+}
+
+/**
+ * Once a day (on the first write of the day) move Done tasks finished more than
+ * ARCHIVE_AFTER_DAYS ago to the Archive tab. Done in bulk: one read, two writes.
+ */
+function archiveOldTasks_() {
+  var today = new Date().toISOString().slice(0, 10);
+  var props = props_();
+  if (props.getProperty('lastArchive') === today) return 0;
+  props.setProperty('lastArchive', today); // at most one try per day, even if it fails
+
+  var rows = readSheet_('Tasks');
+  var cutoff = new Date(Date.now() - ARCHIVE_AFTER_DAYS * 86400000).toISOString();
+  var old = rows.filter(function (t) { return t.status === 'Done' && t.completedAt && t.completedAt < cutoff; });
+  if (!old.length) return 0;
+  var keep = rows.filter(function (t) { return old.indexOf(t) === -1; });
+
+  var cols = HEADERS.Tasks.length;
+  var ss = ss_();
+  var archive = ss.getSheetByName('Archive');
+  if (!archive) {
+    archive = ss.insertSheet('Archive');
+    archive.getRange(1, 1, 1, cols).setValues([HEADERS.Archive]).setFontWeight('bold');
+    archive.setFrozenRows(1);
+  }
+  // 1) copy to Archive first, 2) then rewrite Tasks — a crash in between can only duplicate, never lose.
+  archive.getRange(archive.getLastRow() + 1, 1, old.length, cols)
+    .setValues(old.map(function (t) { return toRow_('Tasks', t); }));
+
+  var tasks = getSheet_('Tasks');
+  var last = tasks.getLastRow();
+  if (last >= 2) tasks.getRange(2, 1, last - 1, cols).clearContent();
+  if (keep.length) {
+    tasks.getRange(2, 1, keep.length, cols).setValues(keep.map(function (t) { return toRow_('Tasks', t); }));
+  }
+  changed_('Tasks');
+  return old.length;
 }
 
 /**
@@ -539,6 +629,7 @@ function readSheet_(name) {
 /** Call after every write, so later reads in this request (and other requests) see fresh data. */
 function changed_(name) {
   delete MEMO_[name];
+  if (VERSIONED_SHEETS[name]) DIRTY_ = true;
   if (CACHED_SHEETS[name]) {
     try { CacheService.getScriptCache().remove('sheet:' + name); } catch (e) {}
   }

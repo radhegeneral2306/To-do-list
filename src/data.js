@@ -6,11 +6,12 @@
 // - Several requests made at the same moment are merged into one `bootstrap` call,
 //   because each Apps Script round trip costs 1-2 seconds.
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
-import { call } from './api.js'
+import { call, setVersionHandler } from './api.js'
 import { applyOps, dropDependents, newOpId, newTaskId, remapId, taskBelongs } from './outbox.js'
 
 const STALE_MS = 30_000
-const POLL_MS = 120_000
+const POLL_MS = 120_000 // only used with an old backend that has no `ping`
+const PING_MS = 20_000
 const PREFIX = 'taskapp_cache:'
 const OUTBOX = 'taskapp_outbox:'
 const BATCH = 20
@@ -64,6 +65,7 @@ export function clearScope() {
   } catch { /* ignore */ }
   scope = null
   entries = {}
+  knownVersion = null
   outbox = []
   outboxChanged()
   inflight.clear()
@@ -201,12 +203,49 @@ if (typeof document !== 'undefined') {
     if (document.visibilityState === 'visible') { refreshAll(); kick() }
   })
   setInterval(() => {
-    if (document.visibilityState === 'visible') refreshAll()
+    if (!pingWorks && document.visibilityState === 'visible') refreshAll()
   }, POLL_MS)
+  setInterval(ping, PING_MS)
   // While offline, check every 15 s whether the connection is back.
   setInterval(() => {
     if (!online && document.visibilityState === 'visible') { refreshAll(true); kick() }
   }, 15_000)
+}
+
+// ========================================================== CHANGE PING
+// Every 20 s ask the server "did anything change?" (no Sheet read, cheap). Only if the
+// data version moved do we download the lists again. Old backend: 2-min full refresh.
+
+let knownVersion = null
+let pingWorks = true
+
+// Our own write: if nobody else wrote since the version we know, just move forward
+// (no need to re-download what we already show). Otherwise the next ping refetches.
+setVersionHandler(
+  ({ before, v }) => {
+    if (knownVersion === null || before === knownVersion) knownVersion = v
+  },
+  // First data we load tells us which version we're showing, so a change made before our
+  // first ping is still noticed.
+  (v) => {
+    if (knownVersion === null) knownVersion = v
+  },
+)
+
+async function ping() {
+  if (!scope || !pingWorks || document.visibilityState !== 'visible') return
+  try {
+    const { v } = await call('ping')
+    setOnline(true)
+    if (knownVersion === null) knownVersion = v
+    else if (v !== knownVersion) {
+      knownVersion = v
+      refreshAll(true)
+    }
+  } catch (e) {
+    if (/Unknown action/.test(e.message)) pingWorks = false
+    else if (/Network problem/.test(e.message)) setOnline(false)
+  }
 }
 
 // ================================================================= OUTBOX

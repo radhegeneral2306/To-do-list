@@ -20,6 +20,12 @@ export function setToken(token) {
 let onAuthError = () => {}
 export function setAuthErrorHandler(fn) { onAuthError = fn }
 
+// Writes come back with { before, v }: the data version before and after this change.
+// Reads come back with v: the version the returned data reflects.
+let onVersion = () => {}
+let onReadVersion = () => {}
+export function setVersionHandler(fn, onRead) { onVersion = fn; onReadVersion = onRead }
+
 export async function call(action, payload = {}) {
   const token = getToken()
   let res
@@ -45,5 +51,7 @@ export async function call(action, payload = {}) {
     if (/Please login|Session expired|Account disabled/.test(res.error) && action !== 'login') onAuthError()
     throw new Error(res.error)
   }
+  if (res.version) onVersion(res.version)
+  if (res.v) onReadVersion(res.v)
   return res.data
 }

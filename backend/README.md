@@ -65,6 +65,11 @@ Do these in the GitHub website, in this order:
 Paste the new code, then **Deploy → Manage deployments → ✏️ Edit → Version: New version → Deploy**.
 The URL stays the same. If you skip this, the old code keeps running.
 
+## Archive (automatic)
+Once a day, Done tasks finished more than 30 days ago move from `Tasks` to the `Archive` tab.
+This keeps the app fast as tasks pile up. Nothing is deleted: the full history stays in `Archive`
+for reports. In the app, the "Done" filter shows the last 30 days.
+
 ## Rules to follow
 - **Do not edit the `Users` or `Sessions` tabs by hand.** Passwords are stored as hashes; editing breaks logins.
 - You *can* read the `Tasks` tab freely, filter it, or make reports from it in another sheet.
