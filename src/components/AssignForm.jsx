@@ -1,9 +1,8 @@
 import { useState } from 'react'
 import { CheckCircle, Circle } from '@phosphor-icons/react'
-import { call } from '../api.js'
 import { useAuth } from '../auth/AuthContext.jsx'
 import { PRIORITIES, ROLE_LABELS, addDays, isTop } from '../utils.js'
-import { insertTask, useQuery } from '../data.js'
+import { mutateTask, useQuery } from '../data.js'
 import { Avatar, ErrorText, Segmented, SkeletonRows, useToast } from './ui.jsx'
 
 const DUE_CHIPS = [
@@ -22,7 +21,6 @@ export default function AssignForm({ onDone }) {
   const [branch, setBranch] = useState(top ? '' : user.branch)
   const [form, setForm] = useState(EMPTY)
   const [pickDate, setPickDate] = useState(false)
-  const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const branches = useQuery('listBranches')
   const users = useQuery('listUsers')
@@ -32,23 +30,21 @@ export default function AssignForm({ onDone }) {
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }))
   const dueChip = DUE_CHIPS.find(([, fn]) => fn() === form.dueDate)?.[0]
 
-  async function submit(e) {
+  // Shows in the lists at once; saved to the Sheet in the background.
+  function submit(e) {
     e.preventDefault()
     if (!form.assignedTo) return setError('Choose who should do this task.')
-    setBusy(true)
+    if (!form.title.trim()) return setError('Write what needs to be done.')
     setError('')
     try {
-      const t = await call('createTask', { ...form, branch })
-      const who = active.find((u) => u.id === t.assignedTo)
+      mutateTask('create', { ...form, title: form.title.trim(), branch }, user, `assign "${form.title.trim()}"`)
+      const who = active.find((u) => u.id === form.assignedTo)
       toast(`Assigned to ${who?.name || 'team member'}`)
-      insertTask(t, user)
       setForm({ ...EMPTY, priority: form.priority })
       setPickDate(false)
       onDone?.()
     } catch (err) {
       setError(err.message)
-    } finally {
-      setBusy(false)
     }
   }
 
@@ -133,7 +129,7 @@ export default function AssignForm({ onDone }) {
       </div>
 
       <ErrorText>{error || users.error}</ErrorText>
-      <button className="btn block" disabled={busy || !branch}>{busy ? 'Assigning…' : 'Assign Task'}</button>
+      <button className="btn block" disabled={!branch}>Assign Task</button>
     </form>
   )
 }

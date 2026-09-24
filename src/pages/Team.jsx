@@ -97,28 +97,20 @@ function UserSheet({ person, onClose, branches, meId }) {
   const toast = useToast()
   const [form, setForm] = useState(null)
   const [pw, setPw] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
 
   useEffect(() => {
     if (person) setForm({ name: person.name, role: person.role, branch: person.branch === 'All' ? '' : person.branch })
     setPw('')
-    setError('')
   }, [person])
 
-  async function run(fn, message) {
-    setBusy(true)
-    setError('')
-    try {
-      await fn()
-      toast(message)
-      return true
-    } catch (e) {
-      setError(e.message)
-      return false
-    } finally {
-      setBusy(false)
-    }
+  // Close right away; the server's answer arrives as a toast. (Not queued: these are
+  // security changes, so "done" is only shown once the server has really done them.)
+  function background(fn, okMessage) {
+    const who = person.name
+    onClose()
+    fn()
+      .then(() => toast(okMessage))
+      .catch((e) => toast(`${who}: ${e.message}`, 'error'))
   }
 
   const isMe = person?.id === meId
@@ -138,9 +130,9 @@ function UserSheet({ person, onClose, branches, meId }) {
           <form
             className="stack"
             style={{ gap: 14 }}
-            onSubmit={async (e) => {
+            onSubmit={(e) => {
               e.preventDefault()
-              if (await run(() => call('updateUser', { id: person.id, ...form }).then(patchUser), 'Changes saved')) onClose()
+              background(() => call('updateUser', { id: person.id, ...form }).then(patchUser), `${form.name} saved`)
             }}
           >
             <label className="field">
@@ -152,31 +144,28 @@ function UserSheet({ person, onClose, branches, meId }) {
               <Segmented label="Role" value={form.role} onChange={(v) => setForm({ ...form, role: v })} options={ROLE_OPTIONS} />
             </div>
             {needsBranch(form.role) && <BranchSelect branches={branches} value={form.branch} onChange={(v) => setForm({ ...form, branch: v })} />}
-            <button className="btn block" disabled={busy}>Save Changes</button>
+            <button className="btn block">Save Changes</button>
           </form>
 
           <form
             className="field"
-            onSubmit={async (e) => {
+            onSubmit={(e) => {
               e.preventDefault()
-              if (await run(() => call('resetPassword', { id: person.id, newPassword: pw }), `Password changed for ${person.name}`)) setPw('')
+              background(() => call('resetPassword', { id: person.id, newPassword: pw }), `Password changed for ${person.name}`)
             }}
           >
             <span>New password</span>
             <div className="row">
               <input className="input grow" value={pw} minLength={6} placeholder="Min 6 characters" onChange={(e) => setPw(e.target.value)} required />
-              <button className="btn secondary" disabled={busy}>Set</button>
+              <button className="btn secondary">Set</button>
             </div>
           </form>
-
-          <ErrorText>{error}</ErrorText>
 
           {!isMe && (
             <button
               className={'btn block ' + (person.active ? 'danger' : 'secondary')}
-              disabled={busy}
-              onClick={async () => {
-                if (await run(() => call('updateUser', { id: person.id, active: !person.active }).then(patchUser), person.active ? `${person.name} disabled` : `${person.name} enabled`)) onClose()
+              onClick={() => {
+                background(() => call('updateUser', { id: person.id, active: !person.active }).then(patchUser), person.active ? `${person.name} disabled` : `${person.name} enabled`)
               }}
             >
               {person.active ? 'Disable Account' : 'Enable Account'}

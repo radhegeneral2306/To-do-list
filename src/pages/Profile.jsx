@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ArrowCounterClockwise, CaretRight, DeviceMobile, Key, Moon, SignOut, Sun } from '@phosphor-icons/react'
 import { call, DEMO } from '../api.js'
+import { flushOutbox, usePending } from '../data.js'
 import { useAuth } from '../auth/AuthContext.jsx'
 import { useTheme } from '../theme/ThemeProvider.jsx'
 import LargeTitle from '../components/LargeTitle.jsx'
@@ -48,6 +49,19 @@ export default function Profile() {
   const { user, logout } = useAuth()
   const { pref, setPref } = useTheme()
   const [pwOpen, setPwOpen] = useState(false)
+  const [signingOut, setSigningOut] = useState(false)
+  const pending = usePending()
+
+  // Unsaved changes are sent first; only if that fails do we ask before throwing them away.
+  async function signOut() {
+    setSigningOut(true)
+    const left = await flushOutbox(30_000)
+    if (left && !window.confirm(`${left} change${left > 1 ? 's are' : ' is'} not saved yet. Sign out anyway? They will be lost.`)) {
+      setSigningOut(false)
+      return
+    }
+    await logout()
+  }
 
   async function resetDemoData() {
     if (!window.confirm('Delete all demo data and start fresh?')) return
@@ -105,8 +119,8 @@ export default function Profile() {
 
       <section className="section">
         <div className="group">
-          <button className="cell danger" style={{ justifyContent: 'center' }} onClick={logout}>
-            <SignOut size={20} weight="bold" /> Sign Out
+          <button className="cell danger" style={{ justifyContent: 'center' }} onClick={signOut} disabled={signingOut}>
+            <SignOut size={20} weight="bold" /> {signingOut ? `Saving ${pending || ''} change${pending === 1 ? '' : 's'}…` : 'Sign Out'}
           </button>
         </div>
         {DEMO && <p className="muted" style={{ fontSize: 13, textAlign: 'center', marginTop: 12 }}>Demo mode. Data is saved only in this browser.</p>}
