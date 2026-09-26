@@ -325,3 +325,78 @@ test('old Done tasks move to Archive once a day; everything else stays', () => {
   call('updateTask', { id: oldOpen.id, status: 'In Progress' }, admin)
   assert.equal(call('listTasks', {}, admin).find((t) => t.id === oldOpen.id).status, 'In Progress')
 })
+
+// ---- failure handling: our "no" vs Google hiccups ----------------------------------
+const sheetOf = (name) => google.SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name)
+const failOnce = (name, method, message = 'Service Spreadsheets failed while accessing document') => {
+  const sh = sheetOf(name)
+  const orig = sh[method]
+  sh[method] = function () { sh[method] = orig; throw new Error(message) }
+}
+
+test('our own "no" is final, a Google hiccup is marked retryable', () => {
+  const emp = userId(admin, 'raipur.emp')
+  const bad = api.call('createTask', { title: '', branch: 'Raipur', assignedTo: emp }, admin)
+  assert.equal(bad.ok, false)
+  assert.equal(bad.retry, undefined)
+  assert.equal(api.call('deleteTask', { id: 'x' }, raipurUser).retry, undefined) // permission-type answers too
+
+  failOnce('Tasks', 'appendRow')
+  const hiccup = api.call('createTask', { title: 'Retry me', branch: 'Raipur', assignedTo: emp }, admin)
+  assert.equal(hiccup.ok, false)
+  assert.equal(hiccup.retry, true)
+  assert.ok(api.call('createTask', { title: 'Retry me', branch: 'Raipur', assignedTo: emp }, admin).ok)
+})
+
+test('applyOps stops at a Google hiccup so later changes keep their order', () => {
+  const emp = userId(admin, 'raipur.emp')
+  const a = call('createTask', { title: 'A', branch: 'Raipur', assignedTo: emp }, admin)
+  failOnce('Tasks', 'appendRow')
+  const res = call('applyOps', { ops: [
+    { type: 'updateTask', payload: { id: a.id, status: 'In Progress' } },
+    { type: 'createTask', payload: { id: 'Tstop00000001', title: 'B', branch: 'Raipur', assignedTo: emp } },
+    { type: 'updateTask', payload: { id: a.id, status: 'Done' } },
+  ] }, admin)
+  assert.equal(res.length, 2)
+  assert.equal(res[0].ok, true)
+  assert.equal(res[1].retry, true)
+  const list = call('listTasks', {}, admin)
+  assert.equal(list.find((t) => t.id === a.id).status, 'In Progress') // third op was not run
+  assert.ok(!list.some((t) => t.id === 'Tstop00000001'))
+  // A user error in the middle does not stop the batch
+  const res2 = call('applyOps', { ops: [
+    { type: 'updateTask', payload: { id: 'Tnothere0000' } },
+    { type: 'updateTask', payload: { id: a.id, status: 'Done' } },
+  ] }, admin)
+  assert.deepEqual(res2.map((r) => [r.ok, !!r.retry]), [[false, false], [true, false]])
+})
+
+test('sessions close to expiry are extended on use', () => {
+  const row = data.Sessions.find((r) => r[0] === raipurUser)
+  row[2] = String(Date.now() + 86400000) // 1 day left
+  google.CacheService.getScriptCache().remove('sess:' + raipurUser)
+  call('me', {}, raipurUser)
+  assert.ok(Number(row[2]) > Date.now() + 6 * 86400000)
+  // a fresh session is not rewritten on every request
+  const fresh = data.Sessions.find((r) => r[0] === admin)[2]
+  call('me', {}, admin)
+  assert.equal(data.Sessions.find((r) => r[0] === admin)[2], fresh)
+})
+
+test('archive: a failure halfway never loses a task', () => {
+  const emp = userId(admin, 'raipur.emp')
+  const ids = ['K1', 'K2', 'K3', 'OLD'].map((t) => call('createTask', { title: t, branch: 'Raipur', assignedTo: emp }, admin).id)
+  const oldId = ids[3]
+  call('updateTask', { id: oldId, status: 'Done' }, admin)
+  data.Tasks.find((r) => r[0] === oldId)[12] = new Date(Date.now() - 40 * 86400000).toISOString()
+  data.__props.lastArchive = '2000-01-01'
+  // Google fails right after the kept rows were written (while clearing the tail)
+  const sh = sheetOf('Tasks')
+  const origRange = sh.getRange.bind(sh)
+  sh.getRange = (...a) => { const r = origRange(...a); r.clearContent = () => { throw new Error('Service error') }; return r }
+  call('updateTask', { id: ids[0], remarks: 'first write of the day' }, admin)
+  sh.getRange = origRange
+  const left = call('listTasks', {}, admin).map((t) => t.id)
+  for (const id of ids.slice(0, 3)) assert.ok(left.includes(id), 'kept task ' + id + ' must still be there')
+  assert.ok(data.Archive.some((r) => r[0] === oldId)) // copied to Archive
+})

@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { motion, useReducedMotion } from 'motion/react'
 import { CheckSquareOffset, CloudArrowUp, CloudSlash, House, ListChecks, Plus, UserCircle, UsersThree } from '@phosphor-icons/react'
-import { setNotifier, useOnline, usePending } from '../data.js'
+import { setNotifier, useOnline, usePending, useRetrying } from '../data.js'
 import { useAuth } from '../auth/AuthContext.jsx'
 import { DEMO } from '../api.js'
 import { canAssign, isTop } from '../utils.js'
@@ -19,6 +19,7 @@ export default function Layout({ children }) {
   const [assignOpen, setAssignOpen] = useState(false)
   const online = useOnline()
   const pending = usePending()
+  const retrying = useRetrying()
   const toast = useToast()
   useEffect(() => setNotifier(toast), [toast])
 
@@ -40,7 +41,7 @@ export default function Layout({ children }) {
         </div>
       ) : pending > 0 && (
         <div className="offline-pill saving" role="status">
-          <CloudArrowUp size={16} weight="bold" /> Saving {pending} change{pending > 1 ? 's' : ''}…
+          <CloudArrowUp size={16} weight="bold" /> {retrying ? 'Retrying' : 'Saving'} {pending} change{pending > 1 ? 's' : ''}…
         </div>
       )}
       <div className="shell">

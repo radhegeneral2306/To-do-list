@@ -120,7 +120,7 @@ export function createFakeGoogle(data = {}, onChange = () => {}) {
       computeDigest: (_alg, text) => sha256Bytes(text),
       getUuid: uuid,
     },
-    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    LockService: { getScriptLock: () => ({ waitLock() {}, tryLock() { return true }, releaseLock() {} }) },
     ContentService: {
       MimeType: { JSON: 'JSON' },
       createTextOutput(text) {
