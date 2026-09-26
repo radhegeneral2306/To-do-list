@@ -1,9 +1,21 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import { call, getToken, setToken, setAuthErrorHandler } from '../api.js'
-import { clearScope, fetchMe, setScope } from '../data.js'
+import { clearScope, fetchMe, forgetOtherUsers, pendingFor, setScope } from '../data.js'
 
 const AuthContext = createContext(null)
 const USER_KEY = 'taskapp_user'
+const EXPIRED_KEY = 'taskapp_expired' // who was logged out by an expired session (to finish saving)
+
+/** { name, pending } if the last user's session expired with unsaved changes, else null. */
+export function expiredNotice() {
+  try {
+    const x = JSON.parse(localStorage.getItem(EXPIRED_KEY))
+    const pending = x ? pendingFor(x.id) : 0
+    return pending ? { name: x.name, username: x.username, pending } : null
+  } catch {
+    return null
+  }
+}
 
 function savedUser() {
   if (!getToken()) return null
@@ -33,8 +45,21 @@ export function AuthProvider({ children }) {
     setUser(null)
   }
 
+  // Session expired: keep unsaved changes on the phone; they are sent after the same person logs in.
+  function onAuthError(message) {
+    const u = savedUser()
+    const expired = /Session expired|Please login/.test(message || '')
+    if (expired && u) {
+      try { localStorage.setItem(EXPIRED_KEY, JSON.stringify({ id: u.id, name: u.name, username: u.username })) } catch { /* ignore */ }
+    }
+    clearScope({ keepOutbox: expired })
+    saveUser(null)
+    setToken(null)
+    setUser(null)
+  }
+
   useEffect(() => {
-    setAuthErrorHandler(signOutLocally)
+    setAuthErrorHandler(onAuthError)
     if (!getToken()) return
     fetchMe()
       .then((u) => {
@@ -44,7 +69,7 @@ export function AuthProvider({ children }) {
       })
       .catch((e) => {
         // Offline: keep using the saved copy. Anything else: the auth handler already signed us out.
-        if (!savedUser() && !/Network problem/.test(e.message)) signOutLocally()
+        if (!savedUser() && !e.transient) signOutLocally()
       })
       .finally(() => setChecking(false))
   }, [])
@@ -52,7 +77,9 @@ export function AuthProvider({ children }) {
   async function login(username, password) {
     const res = await call('login', { username, password })
     setToken(res.token)
-    setScope(res.user.id)
+    forgetOtherUsers(res.user.id) // someone else's leftovers never mix with this person's data
+    try { localStorage.removeItem(EXPIRED_KEY) } catch { /* ignore */ }
+    setScope(res.user.id) // this user's unsaved changes (if any) start sending now
     saveUser(res.user)
     setUser(res.user)
   }

@@ -6,15 +6,17 @@
 // - Several requests made at the same moment are merged into one `bootstrap` call,
 //   because each Apps Script round trip costs 1-2 seconds.
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
-import { call } from './api.js'
+import { call, isTransient, setVersionHandler } from './api.js'
 import { applyOps, dropDependents, newOpId, newTaskId, remapId, taskBelongs } from './outbox.js'
 
 const STALE_MS = 30_000
-const POLL_MS = 120_000
+const POLL_MS = 120_000 // only used with an old backend that has no `ping`
+const PING_MS = 20_000
 const PREFIX = 'taskapp_cache:'
 const OUTBOX = 'taskapp_outbox:'
 const BATCH = 20
-const BACKOFF = [2000, 5000, 15000]
+const BACKOFF = [2000, 5000, 15000, 30000] // then keeps retrying every 30 s
+const SLOW_SAVE_MS = 120_000 // tell the user once if saving takes longer than this
 
 let scope = null // user id whose data is loaded
 let entries = {} // key -> { data, at }
@@ -30,6 +32,20 @@ function setOnline(v) {
   online = v
   onlineListeners.forEach((fn) => fn())
 }
+
+// One dropped request on mobile data is normal: only call it "offline" when the browser
+// says so, or after 3 network failures in a row.
+let failStreak = 0
+function noteSuccess() {
+  failStreak = 0
+  setOnline(true)
+}
+function noteFailure(e) {
+  if (!/Network problem|took too long/.test(e.message)) return
+  failStreak++
+  if (failStreak >= 3 || (typeof navigator !== 'undefined' && navigator.onLine === false)) setOnline(false)
+}
+const browserOffline = () => typeof navigator !== 'undefined' && navigator.onLine === false
 if (typeof window !== 'undefined') {
   window.addEventListener('online', () => { setOnline(true); refreshAll() })
   window.addEventListener('offline', () => setOnline(false))
@@ -42,6 +58,20 @@ export function useOnline() {
 }
 
 // ---------------------------------------------------------- persistence
+/** How many unsaved changes a (logged-out) user left on this phone. */
+export function pendingFor(userId) {
+  try { return (JSON.parse(localStorage.getItem(OUTBOX + userId)) || []).length } catch { return 0 }
+}
+
+/** A different person logged in on this phone: drop what earlier users left behind. */
+export function forgetOtherUsers(userId) {
+  try {
+    for (const k of Object.keys(localStorage)) {
+      if ((k.startsWith(OUTBOX) || k.startsWith(PREFIX)) && !k.endsWith(':' + userId)) localStorage.removeItem(k)
+    }
+  } catch { /* ignore */ }
+}
+
 /** Load this user's saved copy. Call on login / app start. */
 export function setScope(userId) {
   if (scope === userId) return
@@ -54,16 +84,20 @@ export function setScope(userId) {
   kick()
 }
 
-/** Forget everything for this user (logout, disabled, session expired). */
-export function clearScope() {
+/**
+ * Forget this user's data (logout, disabled account). With keepOutbox (session expired),
+ * unsaved changes stay on the phone and are sent after this same user logs in again.
+ */
+export function clearScope({ keepOutbox = false } = {}) {
   try {
     if (scope) {
       localStorage.removeItem(PREFIX + scope)
-      localStorage.removeItem(OUTBOX + scope)
+      if (!keepOutbox) localStorage.removeItem(OUTBOX + scope)
     }
   } catch { /* ignore */ }
   scope = null
   entries = {}
+  knownVersion = null
   outbox = []
   outboxChanged()
   inflight.clear()
@@ -124,7 +158,7 @@ function fetchKey(key) {
   const startedAt = Date.now()
   const p = (BATCHABLE[action] ? enqueue(action, payload) : call(action, payload))
     .then((data) => {
-      setOnline(true)
+      noteSuccess()
       // A task list read before our last change reached the Sheet is already out of date:
       // keep what we have and read again.
       if (action === 'listTasks' && startedAt < lastWriteAt) {
@@ -135,7 +169,7 @@ function fetchKey(key) {
       return data
     })
     .catch((e) => {
-      if (/Network problem/.test(e.message)) setOnline(false)
+      noteFailure(e)
       throw e
     })
     .finally(() => inflight.delete(key))
@@ -201,12 +235,49 @@ if (typeof document !== 'undefined') {
     if (document.visibilityState === 'visible') { refreshAll(); kick() }
   })
   setInterval(() => {
-    if (document.visibilityState === 'visible') refreshAll()
+    if (!pingWorks && document.visibilityState === 'visible') refreshAll()
   }, POLL_MS)
+  setInterval(ping, PING_MS)
   // While offline, check every 15 s whether the connection is back.
   setInterval(() => {
     if (!online && document.visibilityState === 'visible') { refreshAll(true); kick() }
   }, 15_000)
+}
+
+// ========================================================== CHANGE PING
+// Every 20 s ask the server "did anything change?" (no Sheet read, cheap). Only if the
+// data version moved do we download the lists again. Old backend: 2-min full refresh.
+
+let knownVersion = null
+let pingWorks = true
+
+// Our own write: if nobody else wrote since the version we know, just move forward
+// (no need to re-download what we already show). Otherwise the next ping refetches.
+setVersionHandler(
+  ({ before, v }) => {
+    if (knownVersion === null || before === knownVersion) knownVersion = v
+  },
+  // First data we load tells us which version we're showing, so a change made before our
+  // first ping is still noticed.
+  (v) => {
+    if (knownVersion === null) knownVersion = v
+  },
+)
+
+async function ping() {
+  if (!scope || !pingWorks || document.visibilityState !== 'visible') return
+  try {
+    const { v } = await call('ping')
+    noteSuccess()
+    if (knownVersion === null) knownVersion = v
+    else if (v !== knownVersion) {
+      knownVersion = v
+      refreshAll(true)
+    }
+  } catch (e) {
+    if (/Unknown action/.test(e.message)) pingWorks = false
+    else noteFailure(e)
+  }
 }
 
 // ================================================================= OUTBOX
@@ -217,6 +288,7 @@ if (typeof document !== 'undefined') {
 let outbox = []
 let outboxVersion = 0
 const pendingListeners = new Set()
+let retrying = false // saving has been failing for a while (shown in the pill)
 let notifier = () => {}
 let lastWriteAt = 0
 let workerRunning = false
@@ -253,6 +325,19 @@ if (typeof window !== 'undefined') {
   window.addEventListener('online', () => kick())
 }
 
+/** True while saving keeps failing and the app is retrying. */
+export function useRetrying() {
+  return useSyncExternalStore(
+    (fn) => { pendingListeners.add(fn); return () => pendingListeners.delete(fn) },
+    () => retrying,
+  )
+}
+function setRetrying(v) {
+  if (v === retrying) return
+  retrying = v
+  pendingListeners.forEach((fn) => fn())
+}
+
 /** Number of changes not yet saved to the Sheet. */
 export function usePending() {
   return useSyncExternalStore(
@@ -270,7 +355,7 @@ export const resolveId = (id) => idMap.get(id) || id
  * Returns the task id.
  */
 export function mutateTask(kind, data, me, label) {
-  if (!online) throw new Error('No internet. Change not saved.')
+  if (browserOffline()) throw new Error('No internet. Change not saved.')
   if (!scope) throw new Error('Please login again.')
   const at = new Date().toISOString()
   let op
@@ -325,7 +410,6 @@ export async function flushOutbox(timeoutMs = 30_000) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-const isTransient = (e) => /Network problem|Server error/.test(e.message)
 
 function kick() {
   if (workerRunning || !scope || !outbox.length) return
@@ -342,25 +426,46 @@ function kick() {
 async function drain() {
   const mine = scope
   let attempt = 0
+  let failingSince = 0
+  let warned = false
   while (scope === mine) {
     const batch = loadOutboxOrMemory().slice(0, BATCH)
-    if (!batch.length) return
-    let results
+    if (!batch.length) break
+    let results = null
+    let error = null
     try {
       results = await send(batch)
     } catch (e) {
-      if (!isTransient(e)) return // e.g. session expired: the app signs out
-      setOnline(false)
-      if (attempt >= BACKOFF.length) return // resume when back online / app reopened
-      await sleep(BACKOFF[attempt++])
-      continue
+      error = e
     }
     if (scope !== mine) return
-    attempt = 0
-    setOnline(true)
-    lastWriteAt = Date.now()
-    handleResults(batch.slice(0, results.length), results)
+    if (error && !isTransient(error)) return // a real "no" for the whole batch, e.g. session expired
+    let hiccup = !!error
+    if (results) {
+      noteSuccess()
+      lastWriteAt = Date.now()
+      hiccup = handleResults(batch.slice(0, results.length), results) || hiccup
+    } else {
+      noteFailure(error)
+    }
+    if (!hiccup) {
+      attempt = 0
+      failingSince = 0
+      setRetrying(false)
+      continue
+    }
+    // Temporary problem (network, Google busy): keep the changes and try again, never give up.
+    if (!failingSince) failingSince = Date.now()
+    if (Date.now() - failingSince > SLOW_SAVE_MS) {
+      setRetrying(true)
+      if (!warned) {
+        warned = true
+        notifier(`Still trying to save ${outbox.length} change${outbox.length > 1 ? 's' : ''}. They are safe on this phone.`, 'error')
+      }
+    }
+    await sleep(BACKOFF[Math.min(attempt++, BACKOFF.length - 1)])
   }
+  setRetrying(false)
 }
 
 /** All ops in one applyOps call; one by one if the deployed backend is older. */
@@ -379,7 +484,7 @@ async function send(batch) {
       results.push({ ok: true, data: await call(o.type, o.payload) })
     } catch (e) {
       if (isTransient(e)) {
-        if (results.length) return results // send the rest later
+        if (results.length) return [...results, { ok: false, retry: true, error: e.message }] // rest later, in order
         throw e
       }
       // Old backend: deleting an already-deleted task is fine.
@@ -390,12 +495,18 @@ async function send(batch) {
   return results
 }
 
+/** Returns true if the server hit a temporary problem (those changes stay queued). */
 function handleResults(ops, results) {
   let rest = loadOutboxOrMemory()
-  const done = new Set(ops.map((o) => o.opId))
-  rest = rest.filter((o) => !done.has(o.opId))
-  ops.forEach((op, i) => {
+  let hiccup = false
+  for (let i = 0; i < ops.length; i++) {
+    const op = ops[i]
     const r = results[i]
+    if (!r || r.retry) {
+      hiccup = true // this op and the ones after it are sent again later, in order
+      break
+    }
+    rest = rest.filter((o) => o.opId !== op.opId)
     if (r.ok) {
       const realId = op.type === 'createTask' && r.data && r.data.id ? r.data.id : op.taskId
       if (realId !== op.taskId) {
@@ -407,8 +518,9 @@ function handleResults(ops, results) {
       rest = dropDependents(rest, op)
       notifier(`Couldn't ${op.label || 'save a change'}: ${r.error}`, 'error')
     }
-  })
+  }
   saveOutbox(rest)
+  return hiccup
 }
 
 /** A confirmed change becomes part of the server copy of every cached task list. */

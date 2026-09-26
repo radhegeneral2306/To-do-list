@@ -47,7 +47,7 @@ test('sha256 matches node crypto', () => {
 })
 
 test('setup creates sheets, branches and admin', () => {
-  assert.deepEqual(Object.keys(data).sort(), ['Branches', 'Sessions', 'Tasks', 'Users'])
+  assert.deepEqual(Object.keys(data).filter((k) => !k.startsWith('__')).sort(), ['Archive', 'Branches', 'Sessions', 'Tasks', 'Users'])
   assert.deepEqual(call('listBranches', {}, admin), ['Raipur', 'Durg', 'Jagdalpur', 'Rajim', 'Kurud', 'Hardware'])
   // Password is never stored in plain text
   assert.ok(!JSON.stringify(data.Users).includes('admin123'))
@@ -267,4 +267,136 @@ test('applyOps keeps every permission check', () => {
   assert.equal(own[0].ok, false)
   assert.match(own[0].error, /Only Admin/)
   assert.equal(call('listTasks', {}, admin).filter((x) => x.title === 'x').length, 0)
+})
+
+test('ping reports a version that changes on every data write', () => {
+  const emp = userId(admin, 'raipur.emp')
+  const v0 = call('ping', {}, raipurUser).v
+  const t = call('createTask', { title: 'P', branch: 'Raipur', assignedTo: emp }, admin)
+  const v1 = call('ping', {}, raipurUser).v
+  assert.notEqual(v1, v0)
+  call('updateTask', { id: t.id, status: 'Done' }, raipurUser)
+  const v2 = call('ping', {}, admin).v
+  assert.notEqual(v2, v1)
+  call('listTasks', {}, admin) // reads don't change it
+  assert.equal(call('ping', {}, admin).v, v2)
+  assert.throws(() => call('ping', {}), /Please login/)
+})
+
+test('writes return the version before and after, reads return none', () => {
+  const emp = userId(admin, 'raipur.emp')
+  const before = call('ping', {}, admin).v
+  const res = api.call('createTask', { title: 'V', branch: 'Raipur', assignedTo: emp }, admin)
+  assert.equal(res.version.before, before)
+  assert.notEqual(res.version.v, before)
+  const read = api.call('listTasks', {}, admin)
+  assert.equal(read.version, undefined)
+  assert.equal(read.v, res.version.v) // reads say which version they reflect
+  assert.equal(api.call('me', {}, admin).v, undefined)
+})
+
+test('old Done tasks move to Archive once a day; everything else stays', () => {
+  const emp = userId(admin, 'raipur.emp')
+  const oldDone = call('createTask', { title: 'Old done', branch: 'Raipur', assignedTo: emp }, admin)
+  const newDone = call('createTask', { title: 'New done', branch: 'Raipur', assignedTo: emp }, admin)
+  const oldOpen = call('createTask', { title: 'Old open', branch: 'Raipur', assignedTo: emp }, admin)
+  call('updateTask', { id: oldDone.id, status: 'Done' }, admin)
+  call('updateTask', { id: newDone.id, status: 'Done' }, admin)
+  // Pretend oldDone was finished 40 days ago and oldOpen was created 40 days ago.
+  const long = new Date(Date.now() - 40 * 86400000).toISOString()
+  const col = (name) => ['id', 'title', 'description', 'branch', 'assignedTo', 'assignedBy', 'priority', 'status', 'dueDate', 'remarks', 'createdAt', 'updatedAt', 'completedAt'].indexOf(name)
+  data.Tasks.find((r) => r[0] === oldDone.id)[col('completedAt')] = long
+  data.Tasks.find((r) => r[0] === oldOpen.id)[col('createdAt')] = long
+  data.__props.lastArchive = '2000-01-01'
+
+  call('updateTask', { id: newDone.id, remarks: 'triggers the daily archive' }, admin)
+  const titles = call('listTasks', {}, admin).map((t) => t.title).sort()
+  assert.deepEqual(titles, ['New done', 'Old open'])
+  assert.deepEqual(data.Archive.slice(1).map((r) => r[1]), ['Old done'])
+  assert.equal(data.Archive[1][col('status')], 'Done')
+
+  // Runs only once per day
+  const again = call('createTask', { title: 'Another', branch: 'Raipur', assignedTo: emp }, admin)
+  call('updateTask', { id: again.id, status: 'Done' }, admin)
+  data.Tasks.find((r) => r[0] === again.id)[col('completedAt')] = long
+  call('updateTask', { id: newDone.id, remarks: 'second write today' }, admin)
+  assert.ok(call('listTasks', {}, admin).some((t) => t.id === again.id))
+  // Row numbers after the rewrite are still right
+  call('updateTask', { id: oldOpen.id, status: 'In Progress' }, admin)
+  assert.equal(call('listTasks', {}, admin).find((t) => t.id === oldOpen.id).status, 'In Progress')
+})
+
+// ---- failure handling: our "no" vs Google hiccups ----------------------------------
+const sheetOf = (name) => google.SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name)
+const failOnce = (name, method, message = 'Service Spreadsheets failed while accessing document') => {
+  const sh = sheetOf(name)
+  const orig = sh[method]
+  sh[method] = function () { sh[method] = orig; throw new Error(message) }
+}
+
+test('our own "no" is final, a Google hiccup is marked retryable', () => {
+  const emp = userId(admin, 'raipur.emp')
+  const bad = api.call('createTask', { title: '', branch: 'Raipur', assignedTo: emp }, admin)
+  assert.equal(bad.ok, false)
+  assert.equal(bad.retry, undefined)
+  assert.equal(api.call('deleteTask', { id: 'x' }, raipurUser).retry, undefined) // permission-type answers too
+
+  failOnce('Tasks', 'appendRow')
+  const hiccup = api.call('createTask', { title: 'Retry me', branch: 'Raipur', assignedTo: emp }, admin)
+  assert.equal(hiccup.ok, false)
+  assert.equal(hiccup.retry, true)
+  assert.ok(api.call('createTask', { title: 'Retry me', branch: 'Raipur', assignedTo: emp }, admin).ok)
+})
+
+test('applyOps stops at a Google hiccup so later changes keep their order', () => {
+  const emp = userId(admin, 'raipur.emp')
+  const a = call('createTask', { title: 'A', branch: 'Raipur', assignedTo: emp }, admin)
+  failOnce('Tasks', 'appendRow')
+  const res = call('applyOps', { ops: [
+    { type: 'updateTask', payload: { id: a.id, status: 'In Progress' } },
+    { type: 'createTask', payload: { id: 'Tstop00000001', title: 'B', branch: 'Raipur', assignedTo: emp } },
+    { type: 'updateTask', payload: { id: a.id, status: 'Done' } },
+  ] }, admin)
+  assert.equal(res.length, 2)
+  assert.equal(res[0].ok, true)
+  assert.equal(res[1].retry, true)
+  const list = call('listTasks', {}, admin)
+  assert.equal(list.find((t) => t.id === a.id).status, 'In Progress') // third op was not run
+  assert.ok(!list.some((t) => t.id === 'Tstop00000001'))
+  // A user error in the middle does not stop the batch
+  const res2 = call('applyOps', { ops: [
+    { type: 'updateTask', payload: { id: 'Tnothere0000' } },
+    { type: 'updateTask', payload: { id: a.id, status: 'Done' } },
+  ] }, admin)
+  assert.deepEqual(res2.map((r) => [r.ok, !!r.retry]), [[false, false], [true, false]])
+})
+
+test('sessions close to expiry are extended on use', () => {
+  const row = data.Sessions.find((r) => r[0] === raipurUser)
+  row[2] = String(Date.now() + 86400000) // 1 day left
+  google.CacheService.getScriptCache().remove('sess:' + raipurUser)
+  call('me', {}, raipurUser)
+  assert.ok(Number(row[2]) > Date.now() + 6 * 86400000)
+  // a fresh session is not rewritten on every request
+  const fresh = data.Sessions.find((r) => r[0] === admin)[2]
+  call('me', {}, admin)
+  assert.equal(data.Sessions.find((r) => r[0] === admin)[2], fresh)
+})
+
+test('archive: a failure halfway never loses a task', () => {
+  const emp = userId(admin, 'raipur.emp')
+  const ids = ['K1', 'K2', 'K3', 'OLD'].map((t) => call('createTask', { title: t, branch: 'Raipur', assignedTo: emp }, admin).id)
+  const oldId = ids[3]
+  call('updateTask', { id: oldId, status: 'Done' }, admin)
+  data.Tasks.find((r) => r[0] === oldId)[12] = new Date(Date.now() - 40 * 86400000).toISOString()
+  data.__props.lastArchive = '2000-01-01'
+  // Google fails right after the kept rows were written (while clearing the tail)
+  const sh = sheetOf('Tasks')
+  const origRange = sh.getRange.bind(sh)
+  sh.getRange = (...a) => { const r = origRange(...a); r.clearContent = () => { throw new Error('Service error') }; return r }
+  call('updateTask', { id: ids[0], remarks: 'first write of the day' }, admin)
+  sh.getRange = origRange
+  const left = call('listTasks', {}, admin).map((t) => t.id)
+  for (const id of ids.slice(0, 3)) assert.ok(left.includes(id), 'kept task ' + id + ' must still be there')
+  assert.ok(data.Archive.some((r) => r[0] === oldId)) // copied to Archive
 })

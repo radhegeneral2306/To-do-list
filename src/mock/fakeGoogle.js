@@ -27,6 +27,14 @@ class FakeRange {
     this.sheet.onChange()
     return this
   }
+  clearContent() {
+    for (let r = 0; r < this.numRows; r++) {
+      const line = this.sheet.rows[this.row - 1 + r]
+      if (line) for (let c = 0; c < this.numCols; c++) line[this.col - 1 + c] = ''
+    }
+    this.sheet.onChange()
+    return this
+  }
   setFontWeight() { return this }
   setNumberFormat() { return this }
 }
@@ -92,8 +100,16 @@ export function createFakeGoogle(data = {}, onChange = () => {}) {
     remove: (k) => { store.delete(k) },
   }
 
+  // In-memory stand-in for PropertiesService (kept inside `data` so demo mode persists it).
+  const props = (data.__props ||= {})
+  const scriptProps = {
+    getProperty: (k) => (k in props ? props[k] : null),
+    setProperty: (k, v) => { props[k] = String(v); onChange() },
+  }
+
   return {
     CacheService: { getScriptCache: () => scriptCache },
+    PropertiesService: { getScriptProperties: () => scriptProps },
     SpreadsheetApp: {
       getActiveSpreadsheet: () => spreadsheet,
       getUi: () => ({ alert: () => {} }),
@@ -104,7 +120,7 @@ export function createFakeGoogle(data = {}, onChange = () => {}) {
       computeDigest: (_alg, text) => sha256Bytes(text),
       getUuid: uuid,
     },
-    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    LockService: { getScriptLock: () => ({ waitLock() {}, tryLock() { return true }, releaseLock() {} }) },
     ContentService: {
       MimeType: { JSON: 'JSON' },
       createTextOutput(text) {
@@ -115,7 +131,7 @@ export function createFakeGoogle(data = {}, onChange = () => {}) {
   }
 }
 
-const GLOBALS = ['SpreadsheetApp', 'Utilities', 'LockService', 'ContentService', 'Logger', 'CacheService']
+const GLOBALS = ['SpreadsheetApp', 'Utilities', 'LockService', 'ContentService', 'Logger', 'CacheService', 'PropertiesService']
 
 /** Runs the Apps Script source against the fake services and returns its entry points. */
 export function loadBackend(source, fakeGoogle) {

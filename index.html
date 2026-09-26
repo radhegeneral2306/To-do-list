@@ -9,6 +9,9 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Tasks" />
     <link rel="manifest" href="./manifest.webmanifest" />
+    <!-- Every data call goes to Apps Script (and is redirected to googleusercontent): open those connections early. -->
+    <link rel="preconnect" href="https://script.google.com" crossorigin />
+    <link rel="preconnect" href="https://script.googleusercontent.com" crossorigin />
     <link rel="icon" type="image/png" href="./icon-192.png" />
     <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
     <title>Company Tasks</title>

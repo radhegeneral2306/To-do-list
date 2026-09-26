@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { CheckSquareOffset, Eye, EyeSlash } from '@phosphor-icons/react'
-import { useAuth } from '../auth/AuthContext.jsx'
+import { expiredNotice, useAuth } from '../auth/AuthContext.jsx'
 import { DEMO } from '../api.js'
 import { ErrorText } from '../components/ui.jsx'
 
@@ -13,7 +13,8 @@ const DEMO_USERS = [
 
 export default function Login() {
   const { login } = useAuth()
-  const [username, setUsername] = useState('')
+  const [notice] = useState(expiredNotice)
+  const [username, setUsername] = useState(() => notice?.username || '')
   const [password, setPassword] = useState('')
   const [show, setShow] = useState(false)
   const [error, setError] = useState('')
@@ -44,6 +45,11 @@ export default function Login() {
           <span className="brand-mark"><CheckSquareOffset size={32} weight="bold" /></span>
           <h1>Company Tasks</h1>
           <p className="lead">Sign in to see today&apos;s work.</p>
+          {notice && (
+            <p className="notice" role="status">
+              Your session expired. Log in again as {notice.name} to save {notice.pending} unsaved change{notice.pending > 1 ? 's' : ''}.
+            </p>
+          )}
 
           <label className="field">
             <span>Username</span>
